@@ -11,6 +11,13 @@ from telegram_bot import send_signal
 from database import init_db, save_signal
 from signal_cache import is_duplicate
 from tickers import TICKER_GROUPS, get_timeframes_for_ticker
+import subprocess, sys
+try:
+    from tinkoff.invest import Client, CandleInterval
+except ImportError:
+    print("Устанавливаем официальный SDK...")
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-deps', 'tinkoff-investments==0.1.0'])
+    from tinkoff.invest import Client, CandleInterval
 
 logging.basicConfig(
     level=logging.INFO,
