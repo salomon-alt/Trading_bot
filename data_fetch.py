@@ -4,18 +4,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from pandas import DataFrame
 from tinkoff.invest import Client, CandleInterval
-import subprocess
-import sys
-import importlib
 
-try:
-    from tinkoff.invest import Client, CandleInterval
-except ImportError:
-    print("⚠️  Официальный SDK не найден, устанавливаем...")
-    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-deps', 'tinkoff-investments==0.1.0'])
-    print("✅ Установка завершена")
-    # После установки импортируем заново
-    from tinkoff.invest import Client, CandleInterval
 
 load_dotenv()
 TOKEN = os.getenv("TINKOFF_INVEST_API_TOKEN")
