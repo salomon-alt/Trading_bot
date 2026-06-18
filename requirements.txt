@@ -2,5 +2,5 @@ pandas
 numpy
 ta
 requests
-tinkoff-invest>=0.8.0
+tinkoff-invest
 python-dotenv
