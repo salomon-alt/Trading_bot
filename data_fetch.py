@@ -9,19 +9,19 @@ import sys
 
 # --- Устанавливаем пакет, если не установлен ---
 try:
-    from tinkoff_invest import Client
+    from tinkoff_invest import ProductionSession as Client
 except ImportError:
     print("⚠️  Устанавливаем tinkoff-invest...")
     subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-cache-dir', 'tinkoff-invest==1.0.5'])
-    from tinkoff_invest import Client
+    from tinkoff_invest import ProductionSession as Client
 
 load_dotenv()
 TOKEN = os.getenv("TINKOFF_INVEST_API_TOKEN")
 
 # Интервалы (строки, поддерживаемые пакетом)
 INTERVAL_MAPPING = {
-    "day": "day",
-    "week": "week",
+    "day": "1day",
+    "week": "1week",
     "4h": "4hour",   # если не работает, попробуйте "4h"
     "1h": "1hour",
 }
@@ -43,7 +43,6 @@ def get_figi_by_ticker(ticker: str):
         return FIGI_CACHE[ticker]
 
     instruments = []
-    # Получаем инструменты всех типов
     try:
         resp = _client.get_shares()
         instruments.extend(resp.instruments)
