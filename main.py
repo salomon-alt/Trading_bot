@@ -1,8 +1,3 @@
-import pkgutil
-
-print("INSTALLED MODULES:")
-print("tinkoff" in [m.name for m in pkgutil.iter_modules()])
-
 import logging
 import time
 from datetime import datetime, timedelta, timezone
