@@ -1,3 +1,4 @@
+python-3.11
 tinkoff-investments
 pandas>=2.0.0
 ta>=0.10.0
