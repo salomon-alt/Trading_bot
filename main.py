@@ -1,177 +1,245 @@
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Импорт из data_fetch – после того, как в нём выполнится установка SDK
+import pandas as pd
 from data_fetch import get_figi_by_ticker, get_candles, init_client, TOKEN
 from indicators import generate_signal
 from telegram_bot import send_signal
 from database import init_db, save_signal
 from signal_cache import is_duplicate
+from tickers import TICKER_GROUPS, get_timeframes_for_ticker
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
-TICKERS: List[str] = [
-    "SBER",
-    "GAZP",
-    "ROSN",
-    "NVTK",
-    "SPBE",
-    "USD000UTSTOM",
-    "CNYRUB_TOM",
-    "GLDRUB_TOM",
-    "SLVRUB_TOM",
-]
+SLEEP_SECONDS: int = 7200   # 2 часа
+MAX_WORKERS: int = 8
 
-SLEEP_SECONDS: int = 3600
+TIMEZONE_OFFSET = 4
+WORK_START_HOUR = 8
+WORK_END_HOUR = 20
+
+INTERVAL_DAYS = {
+    "week": 1095,
+    "day": 365,
+    "4h": 90,
+    "1h": 7,
+}
+
+
+def is_working_hours() -> bool:
+    now_utc = datetime.now(timezone.utc)
+    now_local = now_utc + timedelta(hours=TIMEZONE_OFFSET)
+    hour = now_local.hour
+    return WORK_START_HOUR <= hour < WORK_END_HOUR
+
+
+def seconds_until_work_start() -> int:
+    now_utc = datetime.now(timezone.utc)
+    now_local = now_utc + timedelta(hours=TIMEZONE_OFFSET)
+    target = now_local.replace(hour=WORK_START_HOUR, minute=0, second=0, microsecond=0)
+    if now_local.hour >= WORK_END_HOUR:
+        target += timedelta(days=1)
+    delta = target - now_local
+    return max(0, int(delta.total_seconds()))
 
 
 def build_message(
     ticker: str,
-    signal: str,
-    score: int,
-    price: float,
-    rsi: float,
-    adx: float,
-    stop: Optional[float],
-    take: Optional[float],
-    reasons: List[str],
-    rr: Optional[float] = None
+    signals: Dict[str, Dict[str, Any]],
+    main_timeframe: str = "day"
 ) -> str:
-    """Формирует текст сообщения с причинами и RR."""
-    icon = "🟢" if signal == "BUY" else "🔴"
+    main_sig = signals[main_timeframe]
+    icon = "🟢" if main_sig["signal"] == "BUY" else "🔴"
+
     msg = (
-        f"{icon} {signal}\n\n"
+        f"{icon} {main_sig['signal']}\n\n"
         f"Тикер: {ticker}\n"
-        f"Рейтинг: {score}/100\n\n"
-        f"Цена: {price:.2f}\n"
-        f"RSI: {rsi}\n"
-        f"ADX: {adx}\n"
-        f"Стоп: {stop}\n"
-        f"Цель: {take}\n"
+        f"Рейтинг: {main_sig['score']}/100\n\n"
+        f"Цена: {main_sig['price']:.2f}\n"
+        f"RSI: {main_sig['rsi']}\n"
+        f"ADX: {main_sig['adx']}\n"
+        f"Стоп: {main_sig['stop']}\n"
+        f"Цель: {main_sig['take']}\n"
     )
-    if rr is not None:
-        msg += f"RR: {rr:.2f}\n"
-    if reasons:
-        msg += "\nПричины:\n"
-        for r in reasons:
+
+    # Добавляем RR, если он есть
+    if main_sig.get("rr") is not None:
+        msg += f"RR: {main_sig['rr']:.2f}\n"
+
+    msg += f"\nТаймфреймы:\n"
+    order = {"week": 0, "day": 1, "4h": 2, "1h": 3}
+    for tf in sorted(signals.keys(), key=lambda x: order.get(x, 99)):
+        sig = signals[tf]
+        label = {
+            "week": "📅 WEEK (долгосрочный)",
+            "day": "📊 DAY (среднесрочный)",
+            "4h": "⏰ 4H (среднесрочный)",
+            "1h": "🕐 1H (краткосрочный)"
+        }.get(tf, tf)
+        msg += f"{label}: {sig['signal']} ({sig['score']})\n"
+
+    msg += f"\nИтоговый сигнал: {main_timeframe.upper()} – подтверждён всеми таймфреймами"
+
+    if main_sig.get("reasons"):
+        msg += "\n\nПричины:\n"
+        for r in main_sig["reasons"]:
             msg += f"✓ {r}\n"
+
     msg += f"\n{datetime.now().strftime('%d.%m.%Y %H:%M')}"
     return msg
 
 
+def safe_get_candles(figi: str, interval_key: str, days: int, ticker: str, max_retries: int = 2) -> Optional[pd.DataFrame]:
+    from tinkoff.invest.exceptions import RequestError
+    attempt_days = days
+    for attempt in range(max_retries + 1):
+        try:
+            df = get_candles(figi, interval_key, attempt_days, ticker=ticker)
+            return df
+        except RequestError as e:
+            if e.status_code.name == "INVALID_ARGUMENT" and "30014" in str(e):
+                logging.warning(f"Ошибка 30014 для {figi} с days={attempt_days}, уменьшаем до {attempt_days // 2}")
+                attempt_days = max(attempt_days // 2, 1)
+                if attempt == max_retries:
+                    logging.error(f"Не удалось получить свечи для {figi} после {max_retries} повторных попыток")
+                    return None
+                continue
+            else:
+                raise
+    return None
+
+
 def analyze_ticker(ticker: str) -> Optional[Dict[str, Any]]:
-    """Анализирует один тикер, возвращает сигнал или None."""
     figi = get_figi_by_ticker(ticker)
     if not figi:
         logging.warning(f"{ticker}: FIGI не найден")
         return None
 
-    week_df = get_candles(figi, interval_key="week", days=1095)
-    day_df = get_candles(figi, interval_key="day", days=365)
-
-    logging.info(f"{ticker}: DAY={len(day_df)} WEEK={len(week_df)}")
-
-    if week_df.empty or day_df.empty:
+    timeframes = get_timeframes_for_ticker(ticker)
+    if not timeframes:
         return None
 
-    week_signal = generate_signal(week_df)
-    day_signal = generate_signal(day_df)
-
-    logging.info(
-        f"{ticker} | "
-        f"DAY={day_signal['signal']} "
-        f"score={day_signal['score']} | "
-        f"WEEK={week_signal['signal']} "
-        f"score={week_signal['score']}"
-    )
-
-    # Фильтры по недельному таймфрейму
-    if day_signal["signal"] == "BUY":
-        if week_signal["signal"] not in ("BUY", "HOLD"):
-            logging.info(f"{ticker}: BUY не подтвержден (WEEK={week_signal['signal']})")
+    all_signals = {}
+    for tf in timeframes:
+        days = INTERVAL_DAYS.get(tf, 365)
+        df = safe_get_candles(figi, tf, days, ticker)
+        if df is None or df.empty:
+            logging.info(f"{ticker}: {tf} – данные не загружены")
             return None
-    elif day_signal["signal"] == "SELL":
-        if week_signal["signal"] not in ("SELL", "HOLD"):
-            logging.info(f"{ticker}: SELL не подтвержден (WEEK={week_signal['signal']})")
-            return None
-    else:
+        signal = generate_signal(df)
+        all_signals[tf] = signal
+
+    log_parts = [f"{tf}={all_signals[tf]['signal']} {all_signals[tf]['score']}" for tf in timeframes]
+    logging.info(f"{ticker}: {' | '.join(log_parts)}")
+
+    if "day" not in all_signals:
+        logging.warning(f"{ticker}: нет дневного таймфрейма")
+        return None
+
+    day_signal = all_signals["day"]
+    day_sig = day_signal["signal"]
+
+    if day_sig == "HOLD":
         logging.info(f"{ticker}: HOLD (score={day_signal['score']})")
         return None
 
+    for tf, sig in all_signals.items():
+        if tf == "day":
+            continue
+        if day_sig == "BUY" and sig["signal"] == "SELL":
+            logging.info(f"{ticker}: BUY не подтверждён ({tf}={sig['signal']})")
+            return None
+        if day_sig == "SELL" and sig["signal"] == "BUY":
+            logging.info(f"{ticker}: SELL не подтверждён ({tf}={sig['signal']})")
+            return None
+
     return {
         "ticker": ticker,
-        **day_signal
+        "signals": all_signals,
+        "main_timeframe": "day"
     }
 
 
 def main_loop() -> None:
-    """Основной цикл анализа всех тикеров."""
     logging.info("=== Новый проход ===")
-    signals: List[Dict[str, Any]] = []
+    results: List[Dict[str, Any]] = []
 
-    for ticker in TICKERS:
-        try:
-            result = analyze_ticker(ticker)
-            if result:
-                signals.append(result)
-        except Exception as e:
-            logging.exception(f"{ticker}: {e}")
+    all_tickers = []
+    for group, tickers in TICKER_GROUPS.items():
+        all_tickers.extend(tickers)
 
-    if not signals:
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_ticker = {
+            executor.submit(analyze_ticker, ticker): ticker
+            for ticker in all_tickers
+        }
+
+        for future in as_completed(future_to_ticker):
+            ticker = future_to_ticker[future]
+            try:
+                result = future.result()
+                if result:
+                    results.append(result)
+            except Exception as e:
+                logging.exception(f"{ticker}: ошибка в потоке: {e}")
+
+    if not results:
         logging.info("Подходящих сигналов не найдено")
         return
 
-    signals.sort(key=lambda x: x["score"], reverse=True)
+    results.sort(key=lambda x: x["signals"]["day"]["score"], reverse=True)
 
-    for signal_data in signals:
-        ticker = signal_data["ticker"]
-        signal = signal_data["signal"]
+    for data in results:
+        ticker = data["ticker"]
+        day_sig = data["signals"]["day"]["signal"]
 
-        if is_duplicate(ticker, "DAY", signal):
-            logging.info(f"{ticker}: дубликат сигнала")
+        if is_duplicate(ticker, "DAY", day_sig):
+            logging.info(f"{ticker}: дубликат сигнала (кэш)")
             continue
 
         save_signal(
             ticker=ticker,
             timeframe="DAY",
-            signal=signal,
-            score=signal_data["score"],
-            price=signal_data["price"],
-            stop=signal_data["stop"],
-            take=signal_data["take"]
+            signal=day_sig,
+            score=data["signals"]["day"]["score"],
+            price=data["signals"]["day"]["price"],
+            stop=data["signals"]["day"]["stop"],
+            take=data["signals"]["day"]["take"]
         )
 
         msg = build_message(
             ticker=ticker,
-            signal=signal,
-            score=signal_data["score"],
-            price=signal_data["price"],
-            rsi=signal_data["rsi"],
-            adx=signal_data["adx"],
-            stop=signal_data["stop"],
-            take=signal_data["take"],
-            reasons=signal_data.get("reasons", []),
-            rr=signal_data.get("rr")
+            signals=data["signals"],
+            main_timeframe="day"
         )
 
         send_signal(msg)
-        logging.info(f"Отправлен сигнал: {ticker} {signal} ({signal_data['score']}/100)")
+        logging.info(f"Отправлен сигнал: {ticker} {day_sig} (DAY score={data['signals']['day']['score']})")
 
 
 if __name__ == "__main__":
+    if not TOKEN:
+        raise RuntimeError("TINKOFF_INVEST_API_TOKEN не задан в .env")
     init_db()
-    # Инициализируем клиент Tinkoff один раз
     init_client(TOKEN)
 
     while True:
         try:
-            main_loop()
+            if is_working_hours():
+                main_loop()
+                logging.info(f"Сон {SLEEP_SECONDS // 60} минут до следующего прохода")
+                time.sleep(SLEEP_SECONDS)
+            else:
+                wait_seconds = seconds_until_work_start()
+                wait_minutes = wait_seconds // 60
+                logging.info(f"Не рабочее время (с 20:00 до 8:00). Сон {wait_minutes} минут до 8:00.")
+                time.sleep(wait_seconds)
         except Exception as e:
             logging.exception(e)
-        logging.info(f"Сон {SLEEP_SECONDS // 60} минут")
-        time.sleep(SLEEP_SECONDS)
+            time.sleep(60)
