@@ -5,25 +5,20 @@ from dotenv import load_dotenv
 from pandas import DataFrame
 from figi_cache import FIGI_CACHE
 
-# ---------- БЛОК АВТОУСТАНОВКИ SDK (перед импортом tinkoff) ----------
-import importlib.util
+# ---------- БЕЗУСЛОВНАЯ УСТАНОВКА SDK (перед любыми импортами из tinkoff) ----------
 import subprocess
 import sys
 
-# Проверяем, доступен ли модуль tinkoff.invest
-if importlib.util.find_spec("tinkoff.invest") is None:
-    print("⚠️  Tinkoff SDK не найден, устанавливаем...")
-    # Устанавливаем с флагом --no-deps, чтобы избежать конфликта с зависимостью tinkoff
-    subprocess.check_call([
-        sys.executable, '-m', 'pip', 'install',
-        '--no-cache-dir', '--no-deps',
-        'tinkoff-investments'
-    ])
-    print("✅ SDK установлен.")
+# Устанавливаем официальный SDK с игнорированием зависимостей, чтобы избежать конфликтов
+subprocess.check_call([
+    sys.executable, '-m', 'pip', 'install',
+    '--no-cache-dir', '--no-deps',
+    'tinkoff-investments'
+])
 
 # Теперь импортируем классы из SDK
 from tinkoff.invest import Client, CandleInterval
-# ----------------------------------------------------------------------
+# ---------------------------------------------------------------------------------
 
 load_dotenv()
 
@@ -32,6 +27,9 @@ TOKEN = os.getenv("TINKOFF_INVEST_API_TOKEN")
 INTERVAL_MAPPING = {
     "day": CandleInterval.CANDLE_INTERVAL_DAY,
     "week": CandleInterval.CANDLE_INTERVAL_WEEK,
+    # если используете 4h и 1h – они могут отсутствовать в старых версиях, но добавим
+    "4h": CandleInterval.CANDLE_INTERVAL_4_HOUR,
+    "1h": CandleInterval.CANDLE_INTERVAL_1_HOUR,
 }
 
 # Глобальный клиент (инициализируется один раз)
@@ -74,7 +72,7 @@ def get_figi_by_ticker(ticker: str):
     return None
 
 
-def get_candles(figi: str, interval_key: str, days: int):
+def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
     """Загружает свечи для заданного FIGI и интервала."""
     global _client
     if _client is None:
