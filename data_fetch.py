@@ -4,7 +4,18 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from pandas import DataFrame
 from tinkoff.invest import Client, CandleInterval
+import importlib.util
+import subprocess
+import sys
 
+# Проверяем, доступен ли модуль tinkoff.invest
+if importlib.util.find_spec("tinkoff.invest") is None:
+    print("⚠️  Tinkoff SDK не найден, устанавливаем...")
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-cache-dir', '--no-deps', 'tinkoff-investments'])
+    print("✅ SDK установлен.")
+
+# Теперь импортируем классы
+from tinkoff.invest import Client, CandleInterval
 
 load_dotenv()
 TOKEN = os.getenv("TINKOFF_INVEST_API_TOKEN")
