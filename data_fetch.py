@@ -3,7 +3,9 @@ import pandas as pd
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from pandas import DataFrame
-from tinkoff.invest import Client, CandleInterval
+from figi_cache import FIGI_CACHE
+
+# ---------- БЛОК АВТОУСТАНОВКИ SDK (перед импортом tinkoff) ----------
 import importlib.util
 import subprocess
 import sys
@@ -11,90 +13,73 @@ import sys
 # Проверяем, доступен ли модуль tinkoff.invest
 if importlib.util.find_spec("tinkoff.invest") is None:
     print("⚠️  Tinkoff SDK не найден, устанавливаем...")
-    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-cache-dir', '--no-deps', 'tinkoff-investments'])
+    # Устанавливаем с флагом --no-deps, чтобы избежать конфликта с зависимостью tinkoff
+    subprocess.check_call([
+        sys.executable, '-m', 'pip', 'install',
+        '--no-cache-dir', '--no-deps',
+        'tinkoff-investments'
+    ])
     print("✅ SDK установлен.")
 
-# Теперь импортируем классы
+# Теперь импортируем классы из SDK
 from tinkoff.invest import Client, CandleInterval
+# ----------------------------------------------------------------------
 
 load_dotenv()
+
 TOKEN = os.getenv("TINKOFF_INVEST_API_TOKEN")
 
 INTERVAL_MAPPING = {
     "day": CandleInterval.CANDLE_INTERVAL_DAY,
     "week": CandleInterval.CANDLE_INTERVAL_WEEK,
-    "4h": CandleInterval.CANDLE_INTERVAL_4_HOUR,
-    "1h": CandleInterval.CANDLE_INTERVAL_HOUR,
 }
 
-# Кэш: {ticker: {'figi': figi, 'type': 'share'|'currency'|'etf'|'bond'}}
-_INSTRUMENTS_CACHE = {}
-_INSTRUMENTS_LOADED = False
+# Глобальный клиент (инициализируется один раз)
+_client = None
 
-
-def _load_all_instruments():
-    global _INSTRUMENTS_CACHE, _INSTRUMENTS_LOADED
-    if _INSTRUMENTS_LOADED:
-        return
-
-    with Client(TOKEN) as client:
-        # Акции
-        try:
-            shares = client.instruments.shares().instruments
-            for inst in shares:
-                _INSTRUMENTS_CACHE[inst.ticker.upper()] = {'figi': inst.figi, 'type': 'share'}
-        except Exception:
-            pass
-
-        # Валюты
-        try:
-            currencies = client.instruments.currencies().instruments
-            for inst in currencies:
-                _INSTRUMENTS_CACHE[inst.ticker.upper()] = {'figi': inst.figi, 'type': 'currency'}
-        except Exception:
-            pass
-
-        # ETF
-        try:
-            etfs = client.instruments.etfs().instruments
-            for inst in etfs:
-                _INSTRUMENTS_CACHE[inst.ticker.upper()] = {'figi': inst.figi, 'type': 'etf'}
-        except Exception:
-            pass
-
-        # Облигации
-        try:
-            bonds = client.instruments.bonds().instruments
-            for inst in bonds:
-                _INSTRUMENTS_CACHE[inst.ticker.upper()] = {'figi': inst.figi, 'type': 'bond'}
-        except Exception:
-            pass
-
-    _INSTRUMENTS_LOADED = True
-
-
-def init_client(token: str) -> None:
-    pass
+def init_client(token: str):
+    """Инициализирует клиент Tinkoff один раз при запуске."""
+    global _client
+    if _client is None:
+        _client = Client(token).__enter__()
+    return _client
 
 
 def get_figi_by_ticker(ticker: str):
-    ticker = ticker.upper()
-    if not _INSTRUMENTS_LOADED:
-        _load_all_instruments()
-    info = _INSTRUMENTS_CACHE.get(ticker)
-    return info['figi'] if info else None
+    """Возвращает FIGI для тикера, используя кэш и единый клиент."""
+    global _client
+    if _client is None:
+        raise RuntimeError("Клиент Tinkoff не инициализирован. Вызовите init_client() сначала.")
+
+    if ticker in FIGI_CACHE:
+        return FIGI_CACHE[ticker]
+
+    services = [
+        _client.instruments.shares,
+        _client.instruments.currencies,
+        _client.instruments.etfs,
+        _client.instruments.bonds,
+    ]
+
+    for service in services:
+        try:
+            instruments = service().instruments
+            for instrument in instruments:
+                if instrument.ticker.upper() == ticker.upper():
+                    FIGI_CACHE[ticker] = instrument.figi
+                    return instrument.figi
+        except Exception:
+            continue
+
+    return None
 
 
-def get_instrument_type(ticker: str) -> str:
-    """Возвращает тип инструмента: 'share', 'currency', 'etf', 'bond' или None."""
-    ticker = ticker.upper()
-    if not _INSTRUMENTS_LOADED:
-        _load_all_instruments()
-    info = _INSTRUMENTS_CACHE.get(ticker)
-    return info['type'] if info else None
+def get_candles(figi: str, interval_key: str, days: int):
+    """Загружает свечи для заданного FIGI и интервала."""
+    global _client
+    if _client is None:
+        raise RuntimeError("Клиент Tinkoff не инициализирован. Вызовите init_client() сначала.")
 
-
-def get_candles(figi: str, interval_key: str, days: int, ticker: str = None) -> DataFrame:
     interval = INTERVAL_MAPPING.get(interval_key)
     if not interval:
         raise ValueError(f"Неподдерживаемый интервал: {interval_key}")
@@ -102,13 +87,12 @@ def get_candles(figi: str, interval_key: str, days: int, ticker: str = None) -> 
     now = datetime.utcnow()
     from_time = now - timedelta(days=days)
 
-    with Client(TOKEN) as client:
-        candles = client.market_data.get_candles(
-            figi=figi,
-            from_=from_time,
-            to=now,
-            interval=interval,
-        ).candles
+    candles = _client.market_data.get_candles(
+        figi=figi,
+        from_=from_time,
+        to=now,
+        interval=interval,
+    ).candles
 
     if not candles:
         return pd.DataFrame()
@@ -137,12 +121,4 @@ def get_candles(figi: str, interval_key: str, days: int, ticker: str = None) -> 
         return df
 
     df = df.sort_values("time").reset_index(drop=True)
-
-    # Если это облигация – цена в процентах от номинала (1000 ₽) → умножаем на 10
-    if ticker and get_instrument_type(ticker) == 'bond':
-        df['open'] = df['open'] * 10
-        df['high'] = df['high'] * 10
-        df['low'] = df['low'] * 10
-        df['close'] = df['close'] * 10
-
     return df
