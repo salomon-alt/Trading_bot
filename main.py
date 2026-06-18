@@ -68,7 +68,6 @@ def build_message(
         f"Цель: {main_sig['take']}\n"
     )
 
-    # Добавляем RR, если он есть
     if main_sig.get("rr") is not None:
         msg += f"RR: {main_sig['rr']:.2f}\n"
 
@@ -96,22 +95,23 @@ def build_message(
 
 
 def safe_get_candles(figi: str, interval_key: str, days: int, ticker: str, max_retries: int = 2) -> Optional[pd.DataFrame]:
-    from tinkoff.invest.exceptions import RequestError
+    """
+    Получение свечей с повторными попытками при ошибках.
+    Использует общий перехват исключений (без зависимости от конкретных ошибок SDK).
+    """
     attempt_days = days
     for attempt in range(max_retries + 1):
         try:
             df = get_candles(figi, interval_key, attempt_days, ticker=ticker)
             return df
-        except RequestError as e:
-            if e.status_code.name == "INVALID_ARGUMENT" and "30014" in str(e):
-                logging.warning(f"Ошибка 30014 для {figi} с days={attempt_days}, уменьшаем до {attempt_days // 2}")
-                attempt_days = max(attempt_days // 2, 1)
-                if attempt == max_retries:
-                    logging.error(f"Не удалось получить свечи для {figi} после {max_retries} повторных попыток")
-                    return None
-                continue
-            else:
-                raise
+        except Exception as e:
+            logging.warning(f"Ошибка при получении свечей для {figi} (попытка {attempt+1}): {e}")
+            if attempt == max_retries:
+                logging.error(f"Не удалось получить свечи для {figi} после {max_retries} попыток")
+                return None
+            # При ошибке уменьшаем количество дней для следующей попытки
+            attempt_days = max(attempt_days // 2, 1)
+            continue
     return None
 
 
@@ -149,6 +149,7 @@ def analyze_ticker(ticker: str) -> Optional[Dict[str, Any]]:
         logging.info(f"{ticker}: HOLD (score={day_signal['score']})")
         return None
 
+    # Проверяем, что сигнал day подтверждается другими таймфреймами (не противоречит)
     for tf, sig in all_signals.items():
         if tf == "day":
             continue
