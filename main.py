@@ -1,245 +1,121 @@
-import logging
-import time
-from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Optional, Any
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
+import os
 import pandas as pd
-from data_fetch import get_figi_by_ticker, get_candles, init_client, TOKEN
-from indicators import generate_signal
-from telegram_bot import send_signal
-from database import init_db, save_signal
-from signal_cache import is_duplicate
-from tickers import TICKER_GROUPS, get_timeframes_for_ticker
+from datetime import datetime, timedelta
+from dotenv import load_dotenv
+from pandas import DataFrame
+from figi_cache import FIGI_CACHE
+import subprocess
+import sys
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
+# --- Устанавливаем пакет tinkoff-invest (если не установлен) ---
+try:
+    from tinkoff_invest import TinkoffInvestClient as Client
+except ImportError:
+    print("⚠️  Устанавливаем tinkoff-invest...")
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-cache-dir', 'tinkoff-invest==1.0.5'])
+    from tinkoff_invest import TinkoffInvestClient as Client
 
-SLEEP_SECONDS: int = 7200   # 2 часа
-MAX_WORKERS: int = 8
+load_dotenv()
+TOKEN = os.getenv("TINKOFF_INVEST_API_TOKEN")
 
-TIMEZONE_OFFSET = 4
-WORK_START_HOUR = 8
-WORK_END_HOUR = 20
-
-INTERVAL_DAYS = {
-    "week": 1095,
-    "day": 365,
-    "4h": 90,
-    "1h": 7,
+# Константы интервалов для tinkoff-invest (используются строки)
+INTERVAL_MAPPING = {
+    "day": "1day",
+    "week": "1week",
+    "4h": "4hour",   # если поддерживается, иначе "1hour" или другой
+    "1h": "1hour",
 }
 
+_client = None
 
-def is_working_hours() -> bool:
-    now_utc = datetime.now(timezone.utc)
-    now_local = now_utc + timedelta(hours=TIMEZONE_OFFSET)
-    hour = now_local.hour
-    return WORK_START_HOUR <= hour < WORK_END_HOUR
+def init_client(token: str):
+    global _client
+    if _client is None:
+        _client = Client(token)
+    return _client
 
+def get_figi_by_ticker(ticker: str):
+    global _client
+    if _client is None:
+        raise RuntimeError("Клиент не инициализирован")
 
-def seconds_until_work_start() -> int:
-    now_utc = datetime.now(timezone.utc)
-    now_local = now_utc + timedelta(hours=TIMEZONE_OFFSET)
-    target = now_local.replace(hour=WORK_START_HOUR, minute=0, second=0, microsecond=0)
-    if now_local.hour >= WORK_END_HOUR:
-        target += timedelta(days=1)
-    delta = target - now_local
-    return max(0, int(delta.total_seconds()))
+    if ticker in FIGI_CACHE:
+        return FIGI_CACHE[ticker]
 
+    # В tinkoff-invest получение инструментов отличается
+    # Получаем все акции, валюты, etf, облигации и ищем по тикеру
+    instruments = []
+    try:
+        instruments.extend(_client.get_shares().payload.instruments)
+    except:
+        pass
+    try:
+        instruments.extend(_client.get_currencies().payload.instruments)
+    except:
+        pass
+    try:
+        instruments.extend(_client.get_etfs().payload.instruments)
+    except:
+        pass
+    try:
+        instruments.extend(_client.get_bonds().payload.instruments)
+    except:
+        pass
 
-def build_message(
-    ticker: str,
-    signals: Dict[str, Dict[str, Any]],
-    main_timeframe: str = "day"
-) -> str:
-    main_sig = signals[main_timeframe]
-    icon = "🟢" if main_sig["signal"] == "BUY" else "🔴"
+    for inst in instruments:
+        if inst.ticker.upper() == ticker.upper():
+            FIGI_CACHE[ticker] = inst.figi
+            return inst.figi
 
-    msg = (
-        f"{icon} {main_sig['signal']}\n\n"
-        f"Тикер: {ticker}\n"
-        f"Рейтинг: {main_sig['score']}/100\n\n"
-        f"Цена: {main_sig['price']:.2f}\n"
-        f"RSI: {main_sig['rsi']}\n"
-        f"ADX: {main_sig['adx']}\n"
-        f"Стоп: {main_sig['stop']}\n"
-        f"Цель: {main_sig['take']}\n"
-    )
-
-    # Добавляем RR, если он есть
-    if main_sig.get("rr") is not None:
-        msg += f"RR: {main_sig['rr']:.2f}\n"
-
-    msg += f"\nТаймфреймы:\n"
-    order = {"week": 0, "day": 1, "4h": 2, "1h": 3}
-    for tf in sorted(signals.keys(), key=lambda x: order.get(x, 99)):
-        sig = signals[tf]
-        label = {
-            "week": "📅 WEEK (долгосрочный)",
-            "day": "📊 DAY (среднесрочный)",
-            "4h": "⏰ 4H (среднесрочный)",
-            "1h": "🕐 1H (краткосрочный)"
-        }.get(tf, tf)
-        msg += f"{label}: {sig['signal']} ({sig['score']})\n"
-
-    msg += f"\nИтоговый сигнал: {main_timeframe.upper()} – подтверждён всеми таймфреймами"
-
-    if main_sig.get("reasons"):
-        msg += "\n\nПричины:\n"
-        for r in main_sig["reasons"]:
-            msg += f"✓ {r}\n"
-
-    msg += f"\n{datetime.now().strftime('%d.%m.%Y %H:%M')}"
-    return msg
-
-
-def safe_get_candles(figi: str, interval_key: str, days: int, ticker: str, max_retries: int = 2) -> Optional[pd.DataFrame]:
-    from tinkoff.invest.exceptions import RequestError
-    attempt_days = days
-    for attempt in range(max_retries + 1):
-        try:
-            df = get_candles(figi, interval_key, attempt_days, ticker=ticker)
-            return df
-        except RequestError as e:
-            if e.status_code.name == "INVALID_ARGUMENT" and "30014" in str(e):
-                logging.warning(f"Ошибка 30014 для {figi} с days={attempt_days}, уменьшаем до {attempt_days // 2}")
-                attempt_days = max(attempt_days // 2, 1)
-                if attempt == max_retries:
-                    logging.error(f"Не удалось получить свечи для {figi} после {max_retries} повторных попыток")
-                    return None
-                continue
-            else:
-                raise
     return None
 
+def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
+    global _client
+    if _client is None:
+        raise RuntimeError("Клиент не инициализирован")
 
-def analyze_ticker(ticker: str) -> Optional[Dict[str, Any]]:
-    figi = get_figi_by_ticker(ticker)
-    if not figi:
-        logging.warning(f"{ticker}: FIGI не найден")
-        return None
+    interval = INTERVAL_MAPPING.get(interval_key)
+    if not interval:
+        raise ValueError(f"Неподдерживаемый интервал: {interval_key}")
 
-    timeframes = get_timeframes_for_ticker(ticker)
-    if not timeframes:
-        return None
+    now = datetime.utcnow()
+    from_time = now - timedelta(days=days)
 
-    all_signals = {}
-    for tf in timeframes:
-        days = INTERVAL_DAYS.get(tf, 365)
-        df = safe_get_candles(figi, tf, days, ticker)
-        if df is None or df.empty:
-            logging.info(f"{ticker}: {tf} – данные не загружены")
-            return None
-        signal = generate_signal(df)
-        all_signals[tf] = signal
+    # В tinkoff-invest метод get_candles возвращает объект с полем payload.candles
+    response = _client.get_candles(
+        figi=figi,
+        from_=from_time.isoformat(),
+        to=now.isoformat(),
+        interval=interval
+    )
+    candles = response.payload.candles
 
-    log_parts = [f"{tf}={all_signals[tf]['signal']} {all_signals[tf]['score']}" for tf in timeframes]
-    logging.info(f"{ticker}: {' | '.join(log_parts)}")
+    if not candles:
+        return pd.DataFrame()
 
-    if "day" not in all_signals:
-        logging.warning(f"{ticker}: нет дневного таймфрейма")
-        return None
+    data = []
+    for c in candles:
+        # Цены приходят в виде чисел (float)
+        open_price = c.open
+        high_price = c.high
+        low_price = c.low
+        close_price = c.close
 
-    day_signal = all_signals["day"]
-    day_sig = day_signal["signal"]
-
-    if day_sig == "HOLD":
-        logging.info(f"{ticker}: HOLD (score={day_signal['score']})")
-        return None
-
-    for tf, sig in all_signals.items():
-        if tf == "day":
-            continue
-        if day_sig == "BUY" and sig["signal"] == "SELL":
-            logging.info(f"{ticker}: BUY не подтверждён ({tf}={sig['signal']})")
-            return None
-        if day_sig == "SELL" and sig["signal"] == "BUY":
-            logging.info(f"{ticker}: SELL не подтверждён ({tf}={sig['signal']})")
-            return None
-
-    return {
-        "ticker": ticker,
-        "signals": all_signals,
-        "main_timeframe": "day"
-    }
-
-
-def main_loop() -> None:
-    logging.info("=== Новый проход ===")
-    results: List[Dict[str, Any]] = []
-
-    all_tickers = []
-    for group, tickers in TICKER_GROUPS.items():
-        all_tickers.extend(tickers)
-
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_to_ticker = {
-            executor.submit(analyze_ticker, ticker): ticker
-            for ticker in all_tickers
-        }
-
-        for future in as_completed(future_to_ticker):
-            ticker = future_to_ticker[future]
-            try:
-                result = future.result()
-                if result:
-                    results.append(result)
-            except Exception as e:
-                logging.exception(f"{ticker}: ошибка в потоке: {e}")
-
-    if not results:
-        logging.info("Подходящих сигналов не найдено")
-        return
-
-    results.sort(key=lambda x: x["signals"]["day"]["score"], reverse=True)
-
-    for data in results:
-        ticker = data["ticker"]
-        day_sig = data["signals"]["day"]["signal"]
-
-        if is_duplicate(ticker, "DAY", day_sig):
-            logging.info(f"{ticker}: дубликат сигнала (кэш)")
+        if min(open_price, high_price, low_price, close_price) <= 0:
             continue
 
-        save_signal(
-            ticker=ticker,
-            timeframe="DAY",
-            signal=day_sig,
-            score=data["signals"]["day"]["score"],
-            price=data["signals"]["day"]["price"],
-            stop=data["signals"]["day"]["stop"],
-            take=data["signals"]["day"]["take"]
-        )
+        data.append({
+            "time": c.time,
+            "open": open_price,
+            "high": high_price,
+            "low": low_price,
+            "close": close_price,
+            "volume": c.volume
+        })
 
-        msg = build_message(
-            ticker=ticker,
-            signals=data["signals"],
-            main_timeframe="day"
-        )
+    df = pd.DataFrame(data)
+    if df.empty:
+        return df
 
-        send_signal(msg)
-        logging.info(f"Отправлен сигнал: {ticker} {day_sig} (DAY score={data['signals']['day']['score']})")
-
-
-if __name__ == "__main__":
-    if not TOKEN:
-        raise RuntimeError("TINKOFF_INVEST_API_TOKEN не задан в .env")
-    init_db()
-    init_client(TOKEN)
-
-    while True:
-        try:
-            if is_working_hours():
-                main_loop()
-                logging.info(f"Сон {SLEEP_SECONDS // 60} минут до следующего прохода")
-                time.sleep(SLEEP_SECONDS)
-            else:
-                wait_seconds = seconds_until_work_start()
-                wait_minutes = wait_seconds // 60
-                logging.info(f"Не рабочее время (с 20:00 до 8:00). Сон {wait_minutes} минут до 8:00.")
-                time.sleep(wait_seconds)
-        except Exception as e:
-            logging.exception(e)
-            time.sleep(60)
+    df = df.sort_values("time").reset_index(drop=True)
+    return df
