@@ -7,22 +7,22 @@ from figi_cache import FIGI_CACHE
 import subprocess
 import sys
 
-# --- Устанавливаем пакет tinkoff-invest (если не установлен) ---
+# --- Устанавливаем пакет, если не установлен ---
 try:
-    from tinkoff_invest import TinkoffInvestClient as Client
+    from tinkoff_invest import Client
 except ImportError:
     print("⚠️  Устанавливаем tinkoff-invest...")
     subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-cache-dir', 'tinkoff-invest==1.0.5'])
-    from tinkoff_invest import TinkoffInvestClient as Client
+    from tinkoff_invest import Client
 
 load_dotenv()
 TOKEN = os.getenv("TINKOFF_INVEST_API_TOKEN")
 
-# Константы интервалов для tinkoff-invest (используются строки)
+# Интервалы (строки, поддерживаемые пакетом)
 INTERVAL_MAPPING = {
-    "day": "1day",
-    "week": "1week",
-    "4h": "4hour",   # если поддерживается, иначе "1hour" или другой
+    "day": "day",
+    "week": "week",
+    "4h": "4hour",   # если не работает, попробуйте "4h"
     "1h": "1hour",
 }
 
@@ -42,23 +42,26 @@ def get_figi_by_ticker(ticker: str):
     if ticker in FIGI_CACHE:
         return FIGI_CACHE[ticker]
 
-    # В tinkoff-invest получение инструментов отличается
-    # Получаем все акции, валюты, etf, облигации и ищем по тикеру
     instruments = []
+    # Получаем инструменты всех типов
     try:
-        instruments.extend(_client.get_shares().payload.instruments)
+        resp = _client.get_shares()
+        instruments.extend(resp.instruments)
     except:
         pass
     try:
-        instruments.extend(_client.get_currencies().payload.instruments)
+        resp = _client.get_currencies()
+        instruments.extend(resp.instruments)
     except:
         pass
     try:
-        instruments.extend(_client.get_etfs().payload.instruments)
+        resp = _client.get_etfs()
+        instruments.extend(resp.instruments)
     except:
         pass
     try:
-        instruments.extend(_client.get_bonds().payload.instruments)
+        resp = _client.get_bonds()
+        instruments.extend(resp.instruments)
     except:
         pass
 
@@ -81,21 +84,19 @@ def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
     now = datetime.utcnow()
     from_time = now - timedelta(days=days)
 
-    # В tinkoff-invest метод get_candles возвращает объект с полем payload.candles
     response = _client.get_candles(
         figi=figi,
         from_=from_time.isoformat(),
         to=now.isoformat(),
         interval=interval
     )
-    candles = response.payload.candles
+    candles = response.candles
 
     if not candles:
         return pd.DataFrame()
 
     data = []
     for c in candles:
-        # Цены приходят в виде чисел (float)
         open_price = c.open
         high_price = c.high
         low_price = c.low
