@@ -1,6 +1,6 @@
-pandas
-numpy
-ta
-requests
-tinkoff-investments
-python-dotenv
+git+https://github.com/Tinkoff/invest-python.git
+pandas>=2.0.0
+ta>=0.10.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+python-telegram-bot>=20.0
