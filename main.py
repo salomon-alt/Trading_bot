@@ -14,14 +14,16 @@ from tickers import TICKER_GROUPS, get_timeframes_for_ticker
 import subprocess
 import sys
 
-# Проверяем, доступен ли модуль tinkoff.invest
+# Проверяем, доступен ли официальный SDK, если нет – устанавливаем
 try:
     from tinkoff.invest import Client, CandleInterval
 except ImportError:
-    print("⚠️  Официальный SDK не найден, устанавливаем...")
-    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-deps', 'tinkoff-investments==0.1.0'])
-    print("✅ Установка завершена")
+    print("⚠️  Tinkoff SDK не найден, устанавливаем...")
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-cache-dir', '--no-deps', 'tinkoff-investments'])
+    print("✅ SDK установлен.")
     from tinkoff.invest import Client, CandleInterval
+
+
 
 logging.basicConfig(
     level=logging.INFO,
