@@ -1,4 +1,4 @@
-tinkoff-invest>=0.8.0
+tinkoff-invest==1.28.0
 pandas>=2.0.0
 ta>=0.10.0
 python-dotenv>=1.0.0
