@@ -3,8 +3,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from pandas import DataFrame
-from tinkoff_invest.client import Client
-from tinkoff_invest import CandleInterval
+from tinkoff.invest import Client, CandleInterval
 
 load_dotenv()
 TOKEN = os.getenv("TINKOFF_INVEST_API_TOKEN")
