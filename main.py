@@ -12,26 +12,31 @@ try:
     client = Client(os.getenv('TINKOFF_INVEST_API_TOKEN'))
     print("✅ Клиент создан", flush=True)
     
-    # Выводим все публичные методы
-    methods = [m for m in dir(client) if not m.startswith('_')]
-    print(f"Доступные методы: {methods}", flush=True)
-    
-    # Проверяем возможные методы для получения инструментов
-    possible = ['get_instruments', 'instruments', 'get_securities', 'securities', 'get_market_data', 'market_data', 'get_tickers', 'tickers']
-    for name in possible:
-        if hasattr(client, name):
-            print(f"Найден метод: {name}", flush=True)
+    # Проверяем методы для получения инструментов
+    for method_name in ['stocks', 'bonds', 'currencies', 'etfs']:
+        if hasattr(client, method_name):
+            print(f"=== Вызываем {method_name}() ===", flush=True)
             try:
-                resp = getattr(client, name)()
-                print(f"Результат {name}: {resp}", flush=True)
+                resp = getattr(client, method_name)()
+                print(f"Тип ответа: {type(resp)}", flush=True)
+                print(f"Атрибуты: {[a for a in dir(resp) if not a.startswith('_')]}", flush=True)
                 if hasattr(resp, 'instruments'):
-                    print(f"instruments: {len(resp.instruments)}", flush=True)
+                    instruments = resp.instruments
+                    print(f"Количество инструментов: {len(instruments)}", flush=True)
+                    if len(instruments) > 0:
+                        print(f"Пример: {instruments[0].ticker} -> {instruments[0].figi}", flush=True)
                 elif hasattr(resp, 'payload'):
                     print(f"payload: {resp.payload}", flush=True)
+                    if hasattr(resp.payload, 'instruments'):
+                        print(f"В payload.instruments: {len(resp.payload.instruments)}", flush=True)
+                        if len(resp.payload.instruments) > 0:
+                            print(f"Пример: {resp.payload.instruments[0].ticker} -> {resp.payload.instruments[0].figi}", flush=True)
+                else:
+                    print("Нет ни instruments, ни payload", flush=True)
             except Exception as e:
-                print(f"Ошибка при вызове {name}: {e}", flush=True)
+                print(f"Ошибка при вызове {method_name}: {e}", flush=True)
         else:
-            print(f"Метод {name} отсутствует", flush=True)
+            print(f"Метод {method_name} отсутствует", flush=True)
             
 except Exception as e:
     print(f"Ошибка: {e}", flush=True)
