@@ -1,3 +1,4 @@
+print("=== data_fetch.py loaded ===", flush=True)
 import os
 import subprocess
 import sys
