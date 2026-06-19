@@ -13,10 +13,9 @@ TOKEN = os.getenv("TINKOFF_INVEST_API_TOKEN")
 if not TOKEN:
     raise RuntimeError("TINKOFF_INVEST_API_TOKEN не задан в .env")
 
-# Базовый URL для REST API
-BASE_URL = "https://invest-public-api.tinkoff.ru/rest/tinkoff.public.invest.api.contract.v1."
+# Правильный базовый URL (без точки после v1)
+BASE_URL = "https://invest-public-api.tinkoff.ru/rest/tinkoff.public.invest.api.contract.v1/"
 
-# Глобальный клиент не нужен – используем requests
 _session = requests.Session()
 _session.headers.update({
     "Authorization": f"Bearer {TOKEN}",
@@ -25,13 +24,12 @@ _session.headers.update({
 })
 
 def init_client(token: str):
-    # Ничего не делаем, токен уже в сессии
     logging.info("REST API клиент инициализирован")
     return _session
 
 def _call_api(method: str, data: dict = None) -> dict:
-    """Универсальный вызов REST API."""
     url = BASE_URL + method
+    logging.info(f"Запрос: {url}")
     resp = _session.post(url, json=data or {})
     resp.raise_for_status()
     return resp.json()
@@ -43,47 +41,35 @@ def get_figi_by_ticker(ticker: str):
     logging.info(f"Запрос FIGI для {ticker}")
     instruments = []
 
-    # Получаем акции
     try:
         resp = _call_api("InstrumentsService/GetShares")
         for item in resp.get("instruments", []):
-            instruments.append({
-                "ticker": item["ticker"],
-                "figi": item["figi"]
-            })
+            instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
+        logging.info(f"Получено акций: {len(instruments)}")
     except Exception as e:
         logging.error(f"Ошибка GetShares: {e}")
 
-    # Получаем валюты
     try:
         resp = _call_api("InstrumentsService/GetCurrencies")
         for item in resp.get("instruments", []):
-            instruments.append({
-                "ticker": item["ticker"],
-                "figi": item["figi"]
-            })
+            instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
+        logging.info(f"Получено валют: {len(instruments)}")
     except Exception as e:
         logging.error(f"Ошибка GetCurrencies: {e}")
 
-    # Получаем облигации
     try:
         resp = _call_api("InstrumentsService/GetBonds")
         for item in resp.get("instruments", []):
-            instruments.append({
-                "ticker": item["ticker"],
-                "figi": item["figi"]
-            })
+            instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
+        logging.info(f"Получено облигаций: {len(instruments)}")
     except Exception as e:
         logging.error(f"Ошибка GetBonds: {e}")
 
-    # Получаем ETF
     try:
         resp = _call_api("InstrumentsService/GetEtfs")
         for item in resp.get("instruments", []):
-            instruments.append({
-                "ticker": item["ticker"],
-                "figi": item["figi"]
-            })
+            instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
+        logging.info(f"Получено ETF: {len(instruments)}")
     except Exception as e:
         logging.error(f"Ошибка GetEtfs: {e}")
 
@@ -101,7 +87,6 @@ def get_figi_by_ticker(ticker: str):
     return None
 
 def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
-    # Маппинг интервалов для REST
     interval_map = {
         "day": "DAY",
         "week": "WEEK",
