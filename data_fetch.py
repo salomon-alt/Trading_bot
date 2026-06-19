@@ -1,6 +1,7 @@
 import os
 import logging
 import time
+import threading
 import pandas as pd
 import requests
 from datetime import datetime, timedelta
@@ -24,6 +25,7 @@ _session.headers.update({
 })
 
 _instruments_cache = None
+_instruments_lock = threading.Lock()
 
 def init_client(token: str):
     logging.info("REST API клиент инициализирован")
@@ -51,41 +53,44 @@ def _load_all_instruments():
     if _instruments_cache is not None:
         return _instruments_cache
 
-    instruments = []
-    try:
-        resp = _call_api("InstrumentsService/Shares")
-        for item in resp.get("instruments", []):
-            instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
-        logging.info(f"Загружено акций: {len(instruments)}")
-    except Exception as e:
-        logging.error(f"Ошибка Shares: {e}")
+    with _instruments_lock:
+        if _instruments_cache is not None:
+            return _instruments_cache
+        instruments = []
+        try:
+            resp = _call_api("InstrumentsService/Shares")
+            for item in resp.get("instruments", []):
+                instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
+            logging.info(f"Загружено акций: {len(instruments)}")
+        except Exception as e:
+            logging.error(f"Ошибка Shares: {e}")
 
-    try:
-        resp = _call_api("InstrumentsService/Currencies")
-        for item in resp.get("instruments", []):
-            instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
-        logging.info(f"Загружено валют: {len(instruments)}")
-    except Exception as e:
-        logging.error(f"Ошибка Currencies: {e}")
+        try:
+            resp = _call_api("InstrumentsService/Currencies")
+            for item in resp.get("instruments", []):
+                instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
+            logging.info(f"Загружено валют: {len(instruments)}")
+        except Exception as e:
+            logging.error(f"Ошибка Currencies: {e}")
 
-    try:
-        resp = _call_api("InstrumentsService/Bonds")
-        for item in resp.get("instruments", []):
-            instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
-        logging.info(f"Загружено облигаций: {len(instruments)}")
-    except Exception as e:
-        logging.error(f"Ошибка Bonds: {e}")
+        try:
+            resp = _call_api("InstrumentsService/Bonds")
+            for item in resp.get("instruments", []):
+                instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
+            logging.info(f"Загружено облигаций: {len(instruments)}")
+        except Exception as e:
+            logging.error(f"Ошибка Bonds: {e}")
 
-    try:
-        resp = _call_api("InstrumentsService/Etfs")
-        for item in resp.get("instruments", []):
-            instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
-        logging.info(f"Загружено ETF: {len(instruments)}")
-    except Exception as e:
-        logging.error(f"Ошибка Etfs: {e}")
+        try:
+            resp = _call_api("InstrumentsService/Etfs")
+            for item in resp.get("instruments", []):
+                instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
+            logging.info(f"Загружено ETF: {len(instruments)}")
+        except Exception as e:
+            logging.error(f"Ошибка Etfs: {e}")
 
-    _instruments_cache = instruments
-    return instruments
+        _instruments_cache = instruments
+        return instruments
 
 def get_figi_by_ticker(ticker: str):
     if ticker in FIGI_CACHE:
@@ -114,31 +119,32 @@ def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
     if not interval:
         raise ValueError(f"Неподдерживаемый интервал: {interval_key}")
 
-    now = datetime.utcnow()
-    from_time = now - timedelta(days=days)
-
-    payload = {
-        "figi": figi,
-        "from": from_time.isoformat() + "Z",
-        "to": now.isoformat() + "Z",
-        "interval": interval
-    }
-
-    # Пробуем оба возможных имени метода для свечей
-    for method_name in ["GetCandles", "Candles"]:
+    attempt_days = days
+    last_error = None
+    while attempt_days >= 1:
+        now = datetime.utcnow()
+        from_time = now - timedelta(days=attempt_days)
+        from_str = from_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        to_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        payload = {"figi": figi, "from": from_str, "to": to_str, "interval": interval}
         try:
-            resp = _call_api(f"MarketDataService/{method_name}", payload)
+            resp = _call_api("MarketDataService/GetCandles", payload)
             candles = resp.get("candles", [])
-            if candles:
-                break
+            if not candles:
+                logging.warning(f"Нет свечей для {figi} за {attempt_days} дней")
+                return pd.DataFrame()
+            break
         except Exception as e:
-            logging.error(f"Ошибка {method_name} для {figi}: {e}")
-            continue
+            last_error = e
+            if "400" in str(e):
+                logging.warning(f"Ошибка 400 для {figi} с days={attempt_days}, уменьшаем до {attempt_days//2}")
+                attempt_days = max(attempt_days // 2, 1)
+                continue
+            else:
+                logging.error(f"Ошибка GetCandles для {figi}: {e}")
+                return pd.DataFrame()
     else:
-        return pd.DataFrame()
-
-    if not candles:
-        logging.warning(f"Нет свечей для {figi}")
+        logging.error(f"Не удалось получить свечи для {figi} даже после уменьшения days. Последняя ошибка: {last_error}")
         return pd.DataFrame()
 
     data = []
