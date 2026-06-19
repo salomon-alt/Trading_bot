@@ -1,5 +1,6 @@
 import os
 import logging
+import time
 import pandas as pd
 import requests
 from datetime import datetime, timedelta
@@ -22,59 +23,78 @@ _session.headers.update({
     "Accept": "application/json"
 })
 
+# Глобальный кэш всех инструментов (чтобы не делать повторные запросы)
+_instruments_cache = None
+
 def init_client(token: str):
     logging.info("REST API клиент инициализирован")
     return _session
 
-def _call_api(method: str, data: dict = None) -> dict:
+def _call_api(method: str, data: dict = None, retries: int = 2) -> dict:
     url = BASE_URL + method
-    logging.info(f"Запрос: {url}")
-    resp = _session.post(url, json=data or {})
-    resp.raise_for_status()
-    return resp.json()
+    for attempt in range(retries + 1):
+        try:
+            logging.info(f"Запрос: {url}")
+            resp = _session.post(url, json=data or {})
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 429:
+                wait = 2 ** attempt
+                logging.warning(f"Ошибка 429 (слишком много запросов). Ждём {wait} секунд...")
+                time.sleep(wait)
+                continue
+            raise
+    raise Exception(f"Не удалось выполнить запрос после {retries} попыток")
+
+def _load_all_instruments():
+    """Загружает все инструменты один раз и кэширует."""
+    global _instruments_cache
+    if _instruments_cache is not None:
+        return _instruments_cache
+
+    instruments = []
+    try:
+        resp = _call_api("InstrumentsService/GetShares")
+        for item in resp.get("instruments", []):
+            instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
+        logging.info(f"Загружено акций: {len(instruments)}")
+    except Exception as e:
+        logging.error(f"Ошибка GetShares: {e}")
+
+    try:
+        resp = _call_api("InstrumentsService/GetCurrencies")
+        for item in resp.get("instruments", []):
+            instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
+        logging.info(f"Загружено валют: {len(instruments)}")
+    except Exception as e:
+        logging.error(f"Ошибка GetCurrencies: {e}")
+
+    try:
+        resp = _call_api("InstrumentsService/GetBonds")
+        for item in resp.get("instruments", []):
+            instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
+        logging.info(f"Загружено облигаций: {len(instruments)}")
+    except Exception as e:
+        logging.error(f"Ошибка GetBonds: {e}")
+
+    try:
+        resp = _call_api("InstrumentsService/GetEtfs")
+        for item in resp.get("instruments", []):
+            instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
+        logging.info(f"Загружено ETF: {len(instruments)}")
+    except Exception as e:
+        logging.error(f"Ошибка GetEtfs: {e}")
+
+    _instruments_cache = instruments
+    return instruments
 
 def get_figi_by_ticker(ticker: str):
     if ticker in FIGI_CACHE:
         return FIGI_CACHE[ticker]
 
     logging.info(f"Запрос FIGI для {ticker}")
-    instruments = []
-
-    try:
-        resp = _call_api("InstrumentsService/Shares")
-        for item in resp.get("instruments", []):
-            instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
-        logging.info(f"Получено акций: {len(instruments)}")
-    except Exception as e:
-        logging.error(f"Ошибка Shares: {e}")
-
-    try:
-        resp = _call_api("InstrumentsService/Currencies")
-        for item in resp.get("instruments", []):
-            instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
-        logging.info(f"Получено валют: {len(instruments)}")
-    except Exception as e:
-        logging.error(f"Ошибка Currencies: {e}")
-
-    try:
-        resp = _call_api("InstrumentsService/Bonds")
-        for item in resp.get("instruments", []):
-            instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
-        logging.info(f"Получено облигаций: {len(instruments)}")
-    except Exception as e:
-        logging.error(f"Ошибка Bonds: {e}")
-
-    try:
-        resp = _call_api("InstrumentsService/Etfs")
-        for item in resp.get("instruments", []):
-            instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
-        logging.info(f"Получено ETF: {len(instruments)}")
-    except Exception as e:
-        logging.error(f"Ошибка Etfs: {e}")
-
-    logging.info(f"Всего инструментов: {len(instruments)}")
-    for inst in instruments[:5]:
-        logging.info(f"Пример: {inst['ticker']} -> {inst['figi']}")
+    instruments = _load_all_instruments()
 
     for inst in instruments:
         if inst["ticker"].upper() == ticker.upper():
@@ -107,10 +127,10 @@ def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
     }
 
     try:
-        resp = _call_api("MarketDataService/Candles", payload)
+        resp = _call_api("MarketDataService/GetCandles", payload)  # <--- исправлено имя метода
         candles = resp.get("candles", [])
     except Exception as e:
-        logging.error(f"Ошибка Candles для {figi}: {e}")
+        logging.error(f"Ошибка GetCandles для {figi}: {e}")
         return pd.DataFrame()
 
     if not candles:
