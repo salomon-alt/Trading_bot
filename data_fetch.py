@@ -26,6 +26,9 @@ _session.headers.update({
 
 _instruments_cache = None
 _instruments_lock = threading.Lock()
+_candles_lock = threading.Lock()        # Для синхронизации запросов свечей
+_last_candle_request_time = 0.0         # Время последнего запроса
+_CANDLE_REQUEST_MIN_INTERVAL = 0.5      # Минимальный интервал между запросами (сек)
 
 def init_client(token: str):
     logging.info("REST API клиент инициализирован")
@@ -41,7 +44,7 @@ def _call_api(method: str, data: dict = None, retries: int = 2) -> dict:
             return resp.json()
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 429:
-                wait = 2 ** attempt
+                wait = 2 ** (attempt + 1)
                 logging.warning(f"Ошибка 429 (слишком много запросов). Ждём {wait} секунд...")
                 time.sleep(wait)
                 continue
@@ -109,6 +112,8 @@ def get_figi_by_ticker(ticker: str):
     return None
 
 def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
+    global _last_candle_request_time
+
     interval_map = {
         "day": "DAY",
         "week": "WEEK",
@@ -121,6 +126,17 @@ def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
 
     attempt_days = days
     last_error = None
+
+    # Ограничиваем частоту запросов к свечам
+    with _candles_lock:
+        now_time = time.time()
+        time_since_last = now_time - _last_candle_request_time
+        if time_since_last < _CANDLE_REQUEST_MIN_INTERVAL:
+            sleep_time = _CANDLE_REQUEST_MIN_INTERVAL - time_since_last
+            logging.info(f"Пауза {sleep_time:.2f} сек для соблюдения лимита запросов к свечам")
+            time.sleep(sleep_time)
+        _last_candle_request_time = time.time()
+
     while attempt_days >= 1:
         now = datetime.utcnow()
         from_time = now - timedelta(days=attempt_days)
