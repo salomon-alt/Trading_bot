@@ -13,8 +13,8 @@ TOKEN = os.getenv("TINKOFF_INVEST_API_TOKEN")
 if not TOKEN:
     raise RuntimeError("TINKOFF_INVEST_API_TOKEN не задан в .env")
 
-# Правильный базовый URL (без точки после v1)
-BASE_URL = "https://invest-public-api.tinkoff.ru/rest/tinkoff.public.invest.api.contract.v1/"
+# Правильный базовый URL – с точкой после v1
+BASE_URL = "https://invest-public-api.tinkoff.ru/rest/tinkoff.public.invest.api.contract.v1."
 
 _session = requests.Session()
 _session.headers.update({
