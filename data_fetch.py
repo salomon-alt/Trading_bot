@@ -53,17 +53,28 @@ def init_client(token: str):
     if _client is None:
         logging.info("Инициализация клиента...")
         _client = Client(token)
-        # Диагностика: выводим доступные атрибуты
-        logging.info(f"Доступные атрибуты клиента: {[a for a in dir(_client) if not a.startswith('_')]}")
+        # ДИАГНОСТИКА: выводим все публичные атрибуты клиента
+        logging.info("=== Доступные атрибуты клиента ===")
+        attrs = [a for a in dir(_client) if not a.startswith('_')]
+        for a in attrs:
+            logging.info(f"  {a}")
+        # Проверяем наличие instruments
         if hasattr(_client, 'instruments'):
             logging.info("Атрибут 'instruments' присутствует")
-            logging.info(f"Атрибуты instruments: {[a for a in dir(_client.instruments) if not a.startswith('_')]}")
+            logging.info(f"instruments содержит: {[a for a in dir(_client.instruments) if not a.startswith('_')]}")
         else:
-            logging.error("Атрибут 'instruments' отсутствует!")
+            logging.warning("Атрибут 'instruments' отсутствует")
+        # Проверяем наличие get_shares и т.п.
+        for method in ['get_shares', 'get_currencies', 'get_etfs', 'get_bonds']:
+            if hasattr(_client, method):
+                logging.info(f"Метод {method} присутствует")
+            else:
+                logging.info(f"Метод {method} отсутствует")
+        logging.info("=== Конец диагностики ===")
     return _client
 
 # -------------------------------------------------------------------
-# 5. Получение FIGI по тикеру (с диагностикой)
+# 5. Получение FIGI по тикеру
 # -------------------------------------------------------------------
 def get_figi_by_ticker(ticker: str):
     global _client
@@ -71,51 +82,54 @@ def get_figi_by_ticker(ticker: str):
         raise RuntimeError("Клиент не инициализирован. Вызовите init_client()")
 
     if ticker in FIGI_CACHE:
-        logging.info(f"FIGI для {ticker} найден в кэше")
         return FIGI_CACHE[ticker]
 
     logging.info(f"Запрос FIGI для {ticker}")
-
     instruments = []
-    # Пробуем получить инструменты через client.instruments
-    try:
-        if hasattr(_client, 'instruments'):
-            logging.info("Вызов _client.instruments.shares()")
+
+    # Пробуем разные варианты
+    if hasattr(_client, 'instruments'):
+        try:
             resp = _client.instruments.shares()
-            logging.info(f"Получено акций: {len(resp.instruments) if resp else 0}")
             instruments.extend(resp.instruments)
-        else:
-            logging.warning("client.instruments недоступен")
-    except Exception as e:
-        logging.error(f"Ошибка при получении shares: {e}")
-
-    try:
-        if hasattr(_client, 'instruments'):
+            logging.info(f"Получено акций: {len(resp.instruments)}")
+        except Exception as e:
+            logging.error(f"Ошибка shares: {e}")
+        try:
             resp = _client.instruments.currencies()
-            logging.info(f"Получено валют: {len(resp.instruments) if resp else 0}")
             instruments.extend(resp.instruments)
-    except Exception as e:
-        logging.error(f"Ошибка при получении currencies: {e}")
-
-    try:
-        if hasattr(_client, 'instruments'):
+            logging.info(f"Получено валют: {len(resp.instruments)}")
+        except Exception as e:
+            logging.error(f"Ошибка currencies: {e}")
+        try:
             resp = _client.instruments.etfs()
-            logging.info(f"Получено ETF: {len(resp.instruments) if resp else 0}")
             instruments.extend(resp.instruments)
-    except Exception as e:
-        logging.error(f"Ошибка при получении etfs: {e}")
-
-    try:
-        if hasattr(_client, 'instruments'):
+            logging.info(f"Получено ETF: {len(resp.instruments)}")
+        except Exception as e:
+            logging.error(f"Ошибка etfs: {e}")
+        try:
             resp = _client.instruments.bonds()
-            logging.info(f"Получено облигаций: {len(resp.instruments) if resp else 0}")
             instruments.extend(resp.instruments)
-    except Exception as e:
-        logging.error(f"Ошибка при получении bonds: {e}")
+            logging.info(f"Получено облигаций: {len(resp.instruments)}")
+        except Exception as e:
+            logging.error(f"Ошибка bonds: {e}")
+    else:
+        logging.warning("client.instruments недоступен, пробуем альтернативные методы")
+        # Альтернатива: если есть get_all_instruments или что-то подобное
+        if hasattr(_client, 'get_all_instruments'):
+            try:
+                resp = _client.get_all_instruments()
+                # структура может отличаться
+                if hasattr(resp, 'instruments'):
+                    instruments.extend(resp.instruments)
+                    logging.info(f"Получено инструментов через get_all_instruments: {len(resp.instruments)}")
+                else:
+                    logging.warning("get_all_instruments вернул неожиданный ответ")
+            except Exception as e:
+                logging.error(f"Ошибка get_all_instruments: {e}")
 
     logging.info(f"Всего инструментов собрано: {len(instruments)}")
     if instruments:
-        # Выведем первые 5 для проверки
         for inst in instruments[:5]:
             logging.info(f"Пример: {inst.ticker} -> {inst.figi}")
     else:
