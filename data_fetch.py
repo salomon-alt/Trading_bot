@@ -1,103 +1,145 @@
-print("=== data_fetch.py loaded ===", flush=True)
 import os
 import subprocess
 import sys
-import logging
 import pandas as pd
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from pandas import DataFrame
 from figi_cache import FIGI_CACHE
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-
 # -------------------------------------------------------------------
-# 1. Установка пакета, если он не найден
+# 1. Установка официального SDK (если не установлен)
 # -------------------------------------------------------------------
 try:
-    from tinkoff_invest import ProductionSession as Client
+    from tinkoff.invest import Client, CandleInterval
 except ImportError:
-    logging.warning("⚠️ Устанавливаем tinkoff-invest...")
-    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-cache-dir', 'tinkoff-invest==1.0.5'])
-    from tinkoff_invest import ProductionSession as Client
+    print("⚠️  Устанавливаем официальный SDK tinkoff-investments...")
+    subprocess.check_call([
+        sys.executable, '-m', 'pip', 'install',
+        '--no-cache-dir', '--no-deps',
+        'tinkoff-investments'
+    ])
+    from tinkoff.invest import Client, CandleInterval
 
 # -------------------------------------------------------------------
 # 2. Загрузка переменных окружения
 # -------------------------------------------------------------------
 load_dotenv()
 TOKEN = os.getenv("TINKOFF_INVEST_API_TOKEN")
-logging.info(f"TOKEN: {'✅ УСТАНОВЛЕН' if TOKEN else '❌ НЕ УСТАНОВЛЕН'}")
+if not TOKEN:
+    raise RuntimeError("TINKOFF_INVEST_API_TOKEN не задан в .env")
 
 # -------------------------------------------------------------------
-# 3. Глобальный клиент
+# 3. Маппинг интервалов для официального SDK
+# -------------------------------------------------------------------
+INTERVAL_MAPPING = {
+    "day": CandleInterval.CANDLE_INTERVAL_DAY,
+    "week": CandleInterval.CANDLE_INTERVAL_WEEK,
+    "4h": CandleInterval.CANDLE_INTERVAL_4_HOUR,
+    "1h": CandleInterval.CANDLE_INTERVAL_1_HOUR,
+}
+
+# -------------------------------------------------------------------
+# 4. Глобальный клиент (единый для всех запросов)
 # -------------------------------------------------------------------
 _client = None
 
 def init_client(token: str):
     global _client
     if _client is None:
-        logging.info("=== Инициализация клиента ===")
         _client = Client(token)
-        logging.info("=== Доступные методы клиента ===")
-        methods = [m for m in dir(_client) if not m.startswith('_')]
-        logging.info(methods)
-
-        # ---- Проверяем получение инструментов ----
-        logging.info("=== Пробуем get_shares() ===")
-        try:
-            resp = _client.get_shares()
-            logging.info(f"Тип ответа: {type(resp)}")
-            attrs = [a for a in dir(resp) if not a.startswith('_')]
-            logging.info(f"Атрибуты ответа: {attrs}")
-            if hasattr(resp, 'instruments'):
-                instruments = resp.instruments
-                logging.info(f"Найдено акций: {len(instruments)}")
-                if len(instruments) > 0:
-                    logging.info(f"Пример: {instruments[0].ticker} -> {instruments[0].figi}")
-            elif hasattr(resp, 'payload'):
-                logging.info(f"payload: {resp.payload}")
-                if hasattr(resp.payload, 'instruments'):
-                    logging.info(f"В payload.instruments: {len(resp.payload.instruments)}")
-            else:
-                logging.info("Нет ни instruments, ни payload")
-        except Exception as e:
-            logging.error(f"Ошибка get_shares: {e}")
-
-        logging.info("=== Пробуем get_currencies() ===")
-        try:
-            resp = _client.get_currencies()
-            if hasattr(resp, 'instruments'):
-                logging.info(f"Найдено валют: {len(resp.instruments)}")
-            else:
-                logging.info(f"Ответ: {resp}")
-        except Exception as e:
-            logging.error(f"Ошибка get_currencies: {e}")
-
-        logging.info("=== Пробуем get_etfs() ===")
-        try:
-            resp = _client.get_etfs()
-            if hasattr(resp, 'instruments'):
-                logging.info(f"Найдено ETF: {len(resp.instruments)}")
-        except Exception as e:
-            logging.error(f"Ошибка get_etfs: {e}")
-
-        logging.info("=== Пробуем get_bonds() ===")
-        try:
-            resp = _client.get_bonds()
-            if hasattr(resp, 'instruments'):
-                logging.info(f"Найдено облигаций: {len(resp.instruments)}")
-        except Exception as e:
-            logging.error(f"Ошибка get_bonds: {e}")
-
-        logging.info("=== Инициализация завершена ===")
     return _client
 
 # -------------------------------------------------------------------
-# 4. Заглушки для остальных функций
+# 5. Получение FIGI по тикеру (с кэшированием)
 # -------------------------------------------------------------------
 def get_figi_by_ticker(ticker: str):
-    logging.info(f"Запрос FIGI для {ticker}")
+    global _client
+    if _client is None:
+        raise RuntimeError("Клиент не инициализирован. Вызовите init_client()")
+
+    if ticker in FIGI_CACHE:
+        return FIGI_CACHE[ticker]
+
+    instruments = []
+    try:
+        resp = _client.get_shares()
+        instruments.extend(resp.instruments)
+    except Exception as e:
+        print(f"[DEBUG] Ошибка get_shares: {e}")
+
+    try:
+        resp = _client.get_currencies()
+        instruments.extend(resp.instruments)
+    except Exception as e:
+        print(f"[DEBUG] Ошибка get_currencies: {e}")
+
+    try:
+        resp = _client.get_etfs()
+        instruments.extend(resp.instruments)
+    except Exception as e:
+        print(f"[DEBUG] Ошибка get_etfs: {e}")
+
+    try:
+        resp = _client.get_bonds()
+        instruments.extend(resp.instruments)
+    except Exception as e:
+        print(f"[DEBUG] Ошибка get_bonds: {e}")
+
+    for inst in instruments:
+        if inst.ticker.upper() == ticker.upper():
+            FIGI_CACHE[ticker] = inst.figi
+            return inst.figi
+
     return None
 
+# -------------------------------------------------------------------
+# 6. Получение свечей
+# -------------------------------------------------------------------
 def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
-    logging.info(f"Запрос свечей для {figi}, интервал: {interval_key}, дней: {days}")
-    return pd.DataFrame()
+    global _client
+    if _client is None:
+        raise RuntimeError("Клиент не инициализирован")
+
+    interval = INTERVAL_MAPPING.get(interval_key)
+    if not interval:
+        raise ValueError(f"Неподдерживаемый интервал: {interval_key}")
+
+    now = datetime.utcnow()
+    from_time = now - timedelta(days=days)
+
+    candles = _client.market_data.get_candles(
+        figi=figi,
+        from_=from_time,
+        to=now,
+        interval=interval,
+    ).candles
+
+    if not candles:
+        return pd.DataFrame()
+
+    data = []
+    for c in candles:
+        open_price = c.open.units + c.open.nano / 1e9
+        high_price = c.high.units + c.high.nano / 1e9
+        low_price = c.low.units + c.low.nano / 1e9
+        close_price = c.close.units + c.close.nano / 1e9
+
+        if min(open_price, high_price, low_price, close_price) <= 0:
+            continue
+
+        data.append({
+            "time": c.time,
+            "open": open_price,
+            "high": high_price,
+            "low": low_price,
+            "close": close_price,
+            "volume": c.volume
+        })
+
+    df = pd.DataFrame(data)
+    if df.empty:
+        return df
+
+    df = df.sort_values("time").reset_index(drop=True)
+    return df
