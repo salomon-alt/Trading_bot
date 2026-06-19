@@ -1,124 +1,113 @@
 import os
 import logging
-import time
-import threading
 import pandas as pd
-import requests
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from figi_cache import FIGI_CACHE
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
+# -------------------------------------------------------------------
+# 1. Импорт неофициального SDK
+# -------------------------------------------------------------------
+try:
+    from tinkoff_invest import ProductionSession as Client
+except ImportError:
+    raise ImportError("Установите tinkoff-invest: pip install tinkoff-invest==1.0.5")
+
 load_dotenv()
 TOKEN = os.getenv("TINKOFF_INVEST_API_TOKEN")
 if not TOKEN:
     raise RuntimeError("TINKOFF_INVEST_API_TOKEN не задан в .env")
 
-BASE_URL = "https://invest-public-api.tinkoff.ru/rest/tinkoff.public.invest.api.contract.v1."
-
-_session = requests.Session()
-_session.headers.update({
-    "Authorization": f"Bearer {TOKEN}",
-    "Content-Type": "application/json",
-    "Accept": "application/json"
-})
-
-_instruments_cache = None
-_instruments_lock = threading.Lock()
-_candles_lock = threading.Lock()        # Для синхронизации запросов свечей
-_last_candle_request_time = 0.0         # Время последнего запроса
-_CANDLE_REQUEST_MIN_INTERVAL = 0.5      # Минимальный интервал между запросами (сек)
+# -------------------------------------------------------------------
+# 2. Глобальный клиент (единый для всех запросов)
+# -------------------------------------------------------------------
+_client = None
 
 def init_client(token: str):
-    logging.info("REST API клиент инициализирован")
-    return _session
+    global _client
+    if _client is None:
+        _client = Client(token)
+        logging.info("Клиент ProductionSession инициализирован")
+    return _client
 
-def _call_api(method: str, data: dict = None, retries: int = 2) -> dict:
-    url = BASE_URL + method
-    for attempt in range(retries + 1):
-        try:
-            logging.info(f"Запрос: {url}")
-            resp = _session.post(url, json=data or {})
-            resp.raise_for_status()
-            return resp.json()
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 429:
-                wait = 2 ** (attempt + 1)
-                logging.warning(f"Ошибка 429 (слишком много запросов). Ждём {wait} секунд...")
-                time.sleep(wait)
-                continue
-            raise
-    raise Exception(f"Не удалось выполнить запрос после {retries} попыток")
-
-def _load_all_instruments():
-    global _instruments_cache
-    if _instruments_cache is not None:
-        return _instruments_cache
-
-    with _instruments_lock:
-        if _instruments_cache is not None:
-            return _instruments_cache
-        instruments = []
-        try:
-            resp = _call_api("InstrumentsService/Shares")
-            for item in resp.get("instruments", []):
-                instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
-            logging.info(f"Загружено акций: {len(instruments)}")
-        except Exception as e:
-            logging.error(f"Ошибка Shares: {e}")
-
-        try:
-            resp = _call_api("InstrumentsService/Currencies")
-            for item in resp.get("instruments", []):
-                instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
-            logging.info(f"Загружено валют: {len(instruments)}")
-        except Exception as e:
-            logging.error(f"Ошибка Currencies: {e}")
-
-        try:
-            resp = _call_api("InstrumentsService/Bonds")
-            for item in resp.get("instruments", []):
-                instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
-            logging.info(f"Загружено облигаций: {len(instruments)}")
-        except Exception as e:
-            logging.error(f"Ошибка Bonds: {e}")
-
-        try:
-            resp = _call_api("InstrumentsService/Etfs")
-            for item in resp.get("instruments", []):
-                instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
-            logging.info(f"Загружено ETF: {len(instruments)}")
-        except Exception as e:
-            logging.error(f"Ошибка Etfs: {e}")
-
-        _instruments_cache = instruments
-        return instruments
-
+# -------------------------------------------------------------------
+# 3. Получение FIGI по тикеру (с кэшированием)
+# -------------------------------------------------------------------
 def get_figi_by_ticker(ticker: str):
+    global _client
+    if _client is None:
+        raise RuntimeError("Клиент не инициализирован. Вызовите init_client()")
+
     if ticker in FIGI_CACHE:
         return FIGI_CACHE[ticker]
 
     logging.info(f"Запрос FIGI для {ticker}")
-    instruments = _load_all_instruments()
+    instruments = []
+
+    try:
+        resp = _client.stocks()
+        if hasattr(resp, 'instruments'):
+            instruments.extend(resp.instruments)
+            logging.info(f"Получено акций: {len(resp.instruments)}")
+    except Exception as e:
+        logging.error(f"Ошибка stocks: {e}")
+
+    try:
+        resp = _client.bonds()
+        if hasattr(resp, 'instruments'):
+            instruments.extend(resp.instruments)
+            logging.info(f"Получено облигаций: {len(resp.instruments)}")
+    except Exception as e:
+        logging.error(f"Ошибка bonds: {e}")
+
+    try:
+        resp = _client.currencies()
+        if hasattr(resp, 'instruments'):
+            instruments.extend(resp.instruments)
+            logging.info(f"Получено валют: {len(resp.instruments)}")
+    except Exception as e:
+        logging.error(f"Ошибка currencies: {e}")
+
+    try:
+        resp = _client.etfs()
+        if hasattr(resp, 'instruments'):
+            instruments.extend(resp.instruments)
+            logging.info(f"Получено ETF: {len(resp.instruments)}")
+    except Exception as e:
+        logging.error(f"Ошибка etfs: {e}")
+
+    logging.info(f"Всего инструментов собрано: {len(instruments)}")
+    if instruments:
+        for inst in instruments[:5]:
+            logging.info(f"Пример: {inst.ticker} -> {inst.figi}")
+    else:
+        logging.warning("Нет ни одного инструмента!")
 
     for inst in instruments:
-        if inst["ticker"].upper() == ticker.upper():
-            FIGI_CACHE[ticker] = inst["figi"]
-            logging.info(f"Найден FIGI для {ticker}: {inst['figi']}")
-            return inst["figi"]
+        if inst.ticker.upper() == ticker.upper():
+            FIGI_CACHE[ticker] = inst.figi
+            logging.info(f"Найден FIGI для {ticker}: {inst.figi}")
+            return inst.figi
 
     logging.warning(f"{ticker}: FIGI не найден")
     return None
 
+# -------------------------------------------------------------------
+# 4. Получение свечей (с автоматическим уменьшением периода при ошибке)
+# -------------------------------------------------------------------
 def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
-    global _last_candle_request_time
+    global _client
+    if _client is None:
+        raise RuntimeError("Клиент не инициализирован")
 
+    # Маппинг интервалов для неофициального SDK
     interval_map = {
-        "day": "DAY",
-        "week": "WEEK",
-        "4h": "4_HOUR",
-        "1h": "HOUR"
+        "day": "day",
+        "week": "week",
+        "4h": "4hour",
+        "1h": "hour"
     }
     interval = interval_map.get(interval_key)
     if not interval:
@@ -127,37 +116,32 @@ def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
     attempt_days = days
     last_error = None
 
-    # Ограничиваем частоту запросов к свечам
-    with _candles_lock:
-        now_time = time.time()
-        time_since_last = now_time - _last_candle_request_time
-        if time_since_last < _CANDLE_REQUEST_MIN_INTERVAL:
-            sleep_time = _CANDLE_REQUEST_MIN_INTERVAL - time_since_last
-            logging.info(f"Пауза {sleep_time:.2f} сек для соблюдения лимита запросов к свечам")
-            time.sleep(sleep_time)
-        _last_candle_request_time = time.time()
-
     while attempt_days >= 1:
         now = datetime.utcnow()
         from_time = now - timedelta(days=attempt_days)
-        from_str = from_time.strftime("%Y-%m-%dT%H:%M:%SZ")
-        to_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-        payload = {"figi": figi, "from": from_str, "to": to_str, "interval": interval}
+        from_str = from_time.isoformat()
+        to_str = now.isoformat()
+
         try:
-            resp = _call_api("MarketDataService/GetCandles", payload)
-            candles = resp.get("candles", [])
+            resp = _client.get_candles(
+                figi=figi,
+                from_=from_str,
+                to=to_str,
+                interval=interval
+            )
+            candles = resp.payload.candles
             if not candles:
                 logging.warning(f"Нет свечей для {figi} за {attempt_days} дней")
                 return pd.DataFrame()
             break
         except Exception as e:
             last_error = e
-            if "400" in str(e):
+            if "400" in str(e) or "InvalidArgument" in str(e):
                 logging.warning(f"Ошибка 400 для {figi} с days={attempt_days}, уменьшаем до {attempt_days//2}")
                 attempt_days = max(attempt_days // 2, 1)
                 continue
             else:
-                logging.error(f"Ошибка GetCandles для {figi}: {e}")
+                logging.error(f"Ошибка get_candles для {figi}: {e}")
                 return pd.DataFrame()
     else:
         logging.error(f"Не удалось получить свечи для {figi} даже после уменьшения days. Последняя ошибка: {last_error}")
@@ -165,21 +149,21 @@ def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
 
     data = []
     for c in candles:
-        open_price = float(c["open"]["units"]) + float(c["open"]["nano"]) / 1e9
-        high_price = float(c["high"]["units"]) + float(c["high"]["nano"]) / 1e9
-        low_price = float(c["low"]["units"]) + float(c["low"]["nano"]) / 1e9
-        close_price = float(c["close"]["units"]) + float(c["close"]["nano"]) / 1e9
+        open_price = c.open
+        high_price = c.high
+        low_price = c.low
+        close_price = c.close
 
         if min(open_price, high_price, low_price, close_price) <= 0:
             continue
 
         data.append({
-            "time": c["time"],
+            "time": c.time,
             "open": open_price,
             "high": high_price,
             "low": low_price,
             "close": close_price,
-            "volume": c["volume"]
+            "volume": c.volume
         })
 
     df = pd.DataFrame(data)
