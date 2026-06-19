@@ -12,15 +12,22 @@ from database import init_db, save_signal
 from signal_cache import is_duplicate
 from tickers import TICKER_GROUPS, get_timeframes_for_ticker
 
-print("=== main.py запущен ===")
-print(f"TOKEN из data_fetch: {'УСТАНОВЛЕН' if TOKEN else 'НЕ УСТАНОВЛЕН'}")
-
+# -------------------------------------------------------------------
+# НАСТРОЙКА ЛОГГИРОВАНИЯ
+# -------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
-SLEEP_SECONDS: int = 7200
+# ОТЛАДОЧНЫЕ СООБЩЕНИЯ (будут видны в логах)
+logging.info("=== main.py запущен ===")
+logging.info(f"TOKEN из data_fetch: {'✅ УСТАНОВЛЕН' if TOKEN else '❌ НЕ УСТАНОВЛЕН'}")
+
+# -------------------------------------------------------------------
+# КОНСТАНТЫ
+# -------------------------------------------------------------------
+SLEEP_SECONDS: int = 7200   # 2 часа
 MAX_WORKERS: int = 8
 
 TIMEZONE_OFFSET = 4
@@ -34,13 +41,14 @@ INTERVAL_DAYS = {
     "1h": 7,
 }
 
-
+# -------------------------------------------------------------------
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (рабочее время)
+# -------------------------------------------------------------------
 def is_working_hours() -> bool:
     now_utc = datetime.now(timezone.utc)
     now_local = now_utc + timedelta(hours=TIMEZONE_OFFSET)
     hour = now_local.hour
     return WORK_START_HOUR <= hour < WORK_END_HOUR
-
 
 def seconds_until_work_start() -> int:
     now_utc = datetime.now(timezone.utc)
@@ -51,7 +59,9 @@ def seconds_until_work_start() -> int:
     delta = target - now_local
     return max(0, int(delta.total_seconds()))
 
-
+# -------------------------------------------------------------------
+# ФУНКЦИЯ ФОРМИРОВАНИЯ СООБЩЕНИЯ
+# -------------------------------------------------------------------
 def build_message(
     ticker: str,
     signals: Dict[str, Dict[str, Any]],
@@ -96,7 +106,9 @@ def build_message(
     msg += f"\n{datetime.now().strftime('%d.%m.%Y %H:%M')}"
     return msg
 
-
+# -------------------------------------------------------------------
+# БЕЗОПАСНОЕ ПОЛУЧЕНИЕ СВЕЧЕЙ (с повторными попытками)
+# -------------------------------------------------------------------
 def safe_get_candles(figi: str, interval_key: str, days: int, ticker: str, max_retries: int = 2) -> Optional[pd.DataFrame]:
     attempt_days = days
     for attempt in range(max_retries + 1):
@@ -112,7 +124,9 @@ def safe_get_candles(figi: str, interval_key: str, days: int, ticker: str, max_r
             continue
     return None
 
-
+# -------------------------------------------------------------------
+# АНАЛИЗ ОДНОГО ТИКЕРА
+# -------------------------------------------------------------------
 def analyze_ticker(ticker: str) -> Optional[Dict[str, Any]]:
     figi = get_figi_by_ticker(ticker)
     if not figi:
@@ -163,7 +177,9 @@ def analyze_ticker(ticker: str) -> Optional[Dict[str, Any]]:
         "main_timeframe": "day"
     }
 
-
+# -------------------------------------------------------------------
+# ОСНОВНОЙ ЦИКЛ
+# -------------------------------------------------------------------
 def main_loop() -> None:
     logging.info("=== Новый проход ===")
     results: List[Dict[str, Any]] = []
@@ -220,14 +236,17 @@ def main_loop() -> None:
         send_signal(msg)
         logging.info(f"Отправлен сигнал: {ticker} {day_sig} (DAY score={data['signals']['day']['score']})")
 
-
+# -------------------------------------------------------------------
+# ТОЧКА ВХОДА
+# -------------------------------------------------------------------
 if __name__ == "__main__":
     if not TOKEN:
         raise RuntimeError("TINKOFF_INVEST_API_TOKEN не задан в .env")
+
     init_db()
-    print("=== Вызываем init_client ===")
+    logging.info("=== Вызываем init_client ===")
     init_client(TOKEN)
-    print("=== init_client завершен ===")
+    logging.info("=== init_client завершен ===")
 
     while True:
         try:
