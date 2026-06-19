@@ -13,7 +13,6 @@ TOKEN = os.getenv("TINKOFF_INVEST_API_TOKEN")
 if not TOKEN:
     raise RuntimeError("TINKOFF_INVEST_API_TOKEN не задан в .env")
 
-# Правильный базовый URL – с точкой после v1
 BASE_URL = "https://invest-public-api.tinkoff.ru/rest/tinkoff.public.invest.api.contract.v1."
 
 _session = requests.Session()
@@ -42,36 +41,36 @@ def get_figi_by_ticker(ticker: str):
     instruments = []
 
     try:
-        resp = _call_api("InstrumentsService/GetShares")
+        resp = _call_api("InstrumentsService/Shares")
         for item in resp.get("instruments", []):
             instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
         logging.info(f"Получено акций: {len(instruments)}")
     except Exception as e:
-        logging.error(f"Ошибка GetShares: {e}")
+        logging.error(f"Ошибка Shares: {e}")
 
     try:
-        resp = _call_api("InstrumentsService/GetCurrencies")
+        resp = _call_api("InstrumentsService/Currencies")
         for item in resp.get("instruments", []):
             instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
         logging.info(f"Получено валют: {len(instruments)}")
     except Exception as e:
-        logging.error(f"Ошибка GetCurrencies: {e}")
+        logging.error(f"Ошибка Currencies: {e}")
 
     try:
-        resp = _call_api("InstrumentsService/GetBonds")
+        resp = _call_api("InstrumentsService/Bonds")
         for item in resp.get("instruments", []):
             instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
         logging.info(f"Получено облигаций: {len(instruments)}")
     except Exception as e:
-        logging.error(f"Ошибка GetBonds: {e}")
+        logging.error(f"Ошибка Bonds: {e}")
 
     try:
-        resp = _call_api("InstrumentsService/GetEtfs")
+        resp = _call_api("InstrumentsService/Etfs")
         for item in resp.get("instruments", []):
             instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
         logging.info(f"Получено ETF: {len(instruments)}")
     except Exception as e:
-        logging.error(f"Ошибка GetEtfs: {e}")
+        logging.error(f"Ошибка Etfs: {e}")
 
     logging.info(f"Всего инструментов: {len(instruments)}")
     for inst in instruments[:5]:
@@ -108,10 +107,10 @@ def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
     }
 
     try:
-        resp = _call_api("MarketDataService/GetCandles", payload)
+        resp = _call_api("MarketDataService/Candles", payload)
         candles = resp.get("candles", [])
     except Exception as e:
-        logging.error(f"Ошибка GetCandles для {figi}: {e}")
+        logging.error(f"Ошибка Candles для {figi}: {e}")
         return pd.DataFrame()
 
     if not candles:
