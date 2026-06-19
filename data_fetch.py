@@ -8,16 +8,16 @@ from pandas import DataFrame
 from figi_cache import FIGI_CACHE
 
 # -------------------------------------------------------------------
-# 1. Установка официального SDK (если не установлен)
+# 1. Установка официального SDK из архива GitHub (если не установлен)
 # -------------------------------------------------------------------
 try:
     from tinkoff.invest import Client, CandleInterval
 except ImportError:
-    print("⚠️  Устанавливаем официальный SDK tinkoff-investments...")
+    print("⚠️  Устанавливаем официальный SDK из GitHub-архива...")
     subprocess.check_call([
         sys.executable, '-m', 'pip', 'install',
-        '--no-cache-dir', '--no-deps',
-        'tinkoff-investments'
+        '--no-cache-dir',
+        'https://github.com/Tinkoff/invest-python/archive/refs/heads/master.zip'
     ])
     from tinkoff.invest import Client, CandleInterval
 
