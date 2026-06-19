@@ -18,104 +18,59 @@ except ImportError:
 load_dotenv()
 TOKEN = os.getenv("TINKOFF_INVEST_API_TOKEN")
 
-# Интервалы (строки, поддерживаемые пакетом)
-INTERVAL_MAPPING = {
-    "day": "1day",
-    "week": "1week",
-    "4h": "4hour",   # если не работает, попробуйте "4h"
-    "1h": "1hour",
-}
-
+# Глобальный клиент
 _client = None
 
 def init_client(token: str):
     global _client
     if _client is None:
         _client = Client(token)
+        # --- ОТЛАДКА: выводим все методы клиента ---
+        print("=== Доступные методы клиента ===")
+        methods = [m for m in dir(_client) if not m.startswith('_')]
+        print(methods)
+        # --- Пробуем получить инструменты разными способами ---
+        print("=== Пробуем get_shares() ===")
+        try:
+            resp = _client.get_shares()
+            print(f"Ответ: {resp}")
+            if hasattr(resp, 'instruments'):
+                print(f"Найдено акций: {len(resp.instruments)}")
+            elif hasattr(resp, 'payload'):
+                print(f"payload: {resp.payload}")
+            else:
+                print("Нет поля instruments или payload")
+        except Exception as e:
+            print(f"Ошибка: {e}")
+
+        print("=== Пробуем get_currencies() ===")
+        try:
+            resp = _client.get_currencies()
+            print(f"Ответ: {resp}")
+            if hasattr(resp, 'instruments'):
+                print(f"Найдено валют: {len(resp.instruments)}")
+            elif hasattr(resp, 'payload'):
+                print(f"payload: {resp.payload}")
+        except Exception as e:
+            print(f"Ошибка: {e}")
+
+        print("=== Пробуем метод get_instruments() если есть ===")
+        if hasattr(_client, 'get_instruments'):
+            try:
+                resp = _client.get_instruments()
+                print(f"Ответ: {resp}")
+            except Exception as e:
+                print(f"Ошибка: {e}")
+        else:
+            print("Метод get_instruments отсутствует")
     return _client
 
+# ... остальные функции (get_figi_by_ticker, get_candles) пока не нужны, 
+# но мы их оставим заглушками для компиляции
+
 def get_figi_by_ticker(ticker: str):
-    global _client
-    if _client is None:
-        raise RuntimeError("Клиент не инициализирован")
-
-    if ticker in FIGI_CACHE:
-        return FIGI_CACHE[ticker]
-
-    instruments = []
-    try:
-        resp = _client.get_shares()
-        instruments.extend(resp.instruments)
-    except:
-        pass
-    try:
-        resp = _client.get_currencies()
-        instruments.extend(resp.instruments)
-    except:
-        pass
-    try:
-        resp = _client.get_etfs()
-        instruments.extend(resp.instruments)
-    except:
-        pass
-    try:
-        resp = _client.get_bonds()
-        instruments.extend(resp.instruments)
-    except:
-        pass
-
-    for inst in instruments:
-        if inst.ticker.upper() == ticker.upper():
-            FIGI_CACHE[ticker] = inst.figi
-            return inst.figi
-
+    # Временно возвращаем None, пока не отладим
     return None
 
 def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
-    global _client
-    if _client is None:
-        raise RuntimeError("Клиент не инициализирован")
-
-    interval = INTERVAL_MAPPING.get(interval_key)
-    if not interval:
-        raise ValueError(f"Неподдерживаемый интервал: {interval_key}")
-
-    now = datetime.utcnow()
-    from_time = now - timedelta(days=days)
-
-    response = _client.get_candles(
-        figi=figi,
-        from_=from_time.isoformat(),
-        to=now.isoformat(),
-        interval=interval
-    )
-    candles = response.candles
-
-    if not candles:
-        return pd.DataFrame()
-
-    data = []
-    for c in candles:
-        open_price = c.open
-        high_price = c.high
-        low_price = c.low
-        close_price = c.close
-
-        if min(open_price, high_price, low_price, close_price) <= 0:
-            continue
-
-        data.append({
-            "time": c.time,
-            "open": open_price,
-            "high": high_price,
-            "low": low_price,
-            "close": close_price,
-            "volume": c.volume
-        })
-
-    df = pd.DataFrame(data)
-    if df.empty:
-        return df
-
-    df = df.sort_values("time").reset_index(drop=True)
-    return df
+    return pd.DataFrame()
