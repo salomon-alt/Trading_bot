@@ -5,3 +5,5 @@ requests>=2.31.0
 python-telegram-bot>=20.0
 grpcio>=1.39.0
 protobuf>=4.21.6
+deprecation>=2.1.0
+cachetools>=5.2.0
