@@ -8,7 +8,7 @@ from pandas import DataFrame
 from figi_cache import FIGI_CACHE
 
 # -------------------------------------------------------------------
-# 1. Установка официального SDK без зависимостей (если не установлен)
+# 1. Установка официального SDK (если не установлен)
 # -------------------------------------------------------------------
 try:
     from tinkoff.invest import Client, CandleInterval
@@ -30,17 +30,17 @@ if not TOKEN:
     raise RuntimeError("TINKOFF_INVEST_API_TOKEN не задан в .env")
 
 # -------------------------------------------------------------------
-# 3. Маппинг интервалов для официального SDK (ИСПРАВЛЕНО)
+# 3. Маппинг интервалов
 # -------------------------------------------------------------------
 INTERVAL_MAPPING = {
     "day": CandleInterval.CANDLE_INTERVAL_DAY,
     "week": CandleInterval.CANDLE_INTERVAL_WEEK,
     "4h": CandleInterval.CANDLE_INTERVAL_4_HOUR,
-    "1h": CandleInterval.CANDLE_INTERVAL_HOUR,   # <-- исправлено
+    "1h": CandleInterval.CANDLE_INTERVAL_HOUR,
 }
 
 # -------------------------------------------------------------------
-# 4. Глобальный клиент (единый для всех запросов)
+# 4. Глобальный клиент
 # -------------------------------------------------------------------
 _client = None
 
@@ -51,7 +51,7 @@ def init_client(token: str):
     return _client
 
 # -------------------------------------------------------------------
-# 5. Получение FIGI по тикеру (с кэшированием)
+# 5. Получение FIGI по тикеру
 # -------------------------------------------------------------------
 def get_figi_by_ticker(ticker: str):
     global _client
@@ -62,29 +62,30 @@ def get_figi_by_ticker(ticker: str):
         return FIGI_CACHE[ticker]
 
     instruments = []
+    # Правильные вызовы: client.instruments.shares() и т.д.
     try:
-        resp = _client.get_shares()
+        resp = _client.instruments.shares()
         instruments.extend(resp.instruments)
     except Exception as e:
-        print(f"[DEBUG] Ошибка get_shares: {e}")
+        print(f"[DEBUG] Ошибка shares: {e}")
 
     try:
-        resp = _client.get_currencies()
+        resp = _client.instruments.currencies()
         instruments.extend(resp.instruments)
     except Exception as e:
-        print(f"[DEBUG] Ошибка get_currencies: {e}")
+        print(f"[DEBUG] Ошибка currencies: {e}")
 
     try:
-        resp = _client.get_etfs()
+        resp = _client.instruments.etfs()
         instruments.extend(resp.instruments)
     except Exception as e:
-        print(f"[DEBUG] Ошибка get_etfs: {e}")
+        print(f"[DEBUG] Ошибка etfs: {e}")
 
     try:
-        resp = _client.get_bonds()
+        resp = _client.instruments.bonds()
         instruments.extend(resp.instruments)
     except Exception as e:
-        print(f"[DEBUG] Ошибка get_bonds: {e}")
+        print(f"[DEBUG] Ошибка bonds: {e}")
 
     for inst in instruments:
         if inst.ticker.upper() == ticker.upper():
