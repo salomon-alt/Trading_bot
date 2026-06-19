@@ -23,7 +23,6 @@ _session.headers.update({
     "Accept": "application/json"
 })
 
-# Глобальный кэш всех инструментов (чтобы не делать повторные запросы)
 _instruments_cache = None
 
 def init_client(token: str):
@@ -48,43 +47,42 @@ def _call_api(method: str, data: dict = None, retries: int = 2) -> dict:
     raise Exception(f"Не удалось выполнить запрос после {retries} попыток")
 
 def _load_all_instruments():
-    """Загружает все инструменты один раз и кэширует."""
     global _instruments_cache
     if _instruments_cache is not None:
         return _instruments_cache
 
     instruments = []
     try:
-        resp = _call_api("InstrumentsService/GetShares")
+        resp = _call_api("InstrumentsService/Shares")
         for item in resp.get("instruments", []):
             instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
         logging.info(f"Загружено акций: {len(instruments)}")
     except Exception as e:
-        logging.error(f"Ошибка GetShares: {e}")
+        logging.error(f"Ошибка Shares: {e}")
 
     try:
-        resp = _call_api("InstrumentsService/GetCurrencies")
+        resp = _call_api("InstrumentsService/Currencies")
         for item in resp.get("instruments", []):
             instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
         logging.info(f"Загружено валют: {len(instruments)}")
     except Exception as e:
-        logging.error(f"Ошибка GetCurrencies: {e}")
+        logging.error(f"Ошибка Currencies: {e}")
 
     try:
-        resp = _call_api("InstrumentsService/GetBonds")
+        resp = _call_api("InstrumentsService/Bonds")
         for item in resp.get("instruments", []):
             instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
         logging.info(f"Загружено облигаций: {len(instruments)}")
     except Exception as e:
-        logging.error(f"Ошибка GetBonds: {e}")
+        logging.error(f"Ошибка Bonds: {e}")
 
     try:
-        resp = _call_api("InstrumentsService/GetEtfs")
+        resp = _call_api("InstrumentsService/Etfs")
         for item in resp.get("instruments", []):
             instruments.append({"ticker": item["ticker"], "figi": item["figi"]})
         logging.info(f"Загружено ETF: {len(instruments)}")
     except Exception as e:
-        logging.error(f"Ошибка GetEtfs: {e}")
+        logging.error(f"Ошибка Etfs: {e}")
 
     _instruments_cache = instruments
     return instruments
@@ -126,11 +124,17 @@ def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
         "interval": interval
     }
 
-    try:
-        resp = _call_api("MarketDataService/GetCandles", payload)  # <--- исправлено имя метода
-        candles = resp.get("candles", [])
-    except Exception as e:
-        logging.error(f"Ошибка GetCandles для {figi}: {e}")
+    # Пробуем оба возможных имени метода для свечей
+    for method_name in ["GetCandles", "Candles"]:
+        try:
+            resp = _call_api(f"MarketDataService/{method_name}", payload)
+            candles = resp.get("candles", [])
+            if candles:
+                break
+        except Exception as e:
+            logging.error(f"Ошибка {method_name} для {figi}: {e}")
+            continue
+    else:
         return pd.DataFrame()
 
     if not candles:
