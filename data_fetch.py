@@ -30,13 +30,13 @@ if not TOKEN:
     raise RuntimeError("TINKOFF_INVEST_API_TOKEN не задан в .env")
 
 # -------------------------------------------------------------------
-# 3. Маппинг интервалов для официального SDK
+# 3. Маппинг интервалов для официального SDK (ИСПРАВЛЕНО)
 # -------------------------------------------------------------------
 INTERVAL_MAPPING = {
     "day": CandleInterval.CANDLE_INTERVAL_DAY,
     "week": CandleInterval.CANDLE_INTERVAL_WEEK,
     "4h": CandleInterval.CANDLE_INTERVAL_4_HOUR,
-    "1h": CandleInterval.CANDLE_INTERVAL_1_HOUR,
+    "1h": CandleInterval.CANDLE_INTERVAL_HOUR,   # <-- исправлено
 }
 
 # -------------------------------------------------------------------
