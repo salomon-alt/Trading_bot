@@ -1,13 +1,8 @@
 import os
-import pandas as pd
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
-from pandas import DataFrame
-from figi_cache import FIGI_CACHE
 import subprocess
 import sys
 
-# --- Устанавливаем пакет, если не установлен ---
+# Устанавливаем пакет, если не установлен
 try:
     from tinkoff_invest import ProductionSession as Client
 except ImportError:
@@ -15,62 +10,56 @@ except ImportError:
     subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-cache-dir', 'tinkoff-invest==1.0.5'])
     from tinkoff_invest import ProductionSession as Client
 
+from dotenv import load_dotenv
 load_dotenv()
-TOKEN = os.getenv("TINKOFF_INVEST_API_TOKEN")
 
-# Глобальный клиент
+TOKEN = os.getenv("TINKOFF_INVEST_API_TOKEN")
+print(f"TOKEN: {'УСТАНОВЛЕН' if TOKEN else 'НЕ УСТАНОВЛЕН'}")
+
 _client = None
 
 def init_client(token: str):
     global _client
     if _client is None:
+        print("=== Инициализация клиента ===")
         _client = Client(token)
-        # --- ОТЛАДКА: выводим все методы клиента ---
         print("=== Доступные методы клиента ===")
         methods = [m for m in dir(_client) if not m.startswith('_')]
         print(methods)
-        # --- Пробуем получить инструменты разными способами ---
+        
         print("=== Пробуем get_shares() ===")
         try:
             resp = _client.get_shares()
-            print(f"Ответ: {resp}")
+            print(f"Тип ответа: {type(resp)}")
+            print(f"Атрибуты: {[a for a in dir(resp) if not a.startswith('_')]}")
             if hasattr(resp, 'instruments'):
                 print(f"Найдено акций: {len(resp.instruments)}")
+                if len(resp.instruments) > 0:
+                    print(f"Первая акция: {resp.instruments[0].ticker} -> {resp.instruments[0].figi}")
             elif hasattr(resp, 'payload'):
                 print(f"payload: {resp.payload}")
-            else:
-                print("Нет поля instruments или payload")
+                if hasattr(resp.payload, 'instruments'):
+                    print(f"В payload.instruments: {len(resp.payload.instruments)}")
         except Exception as e:
             print(f"Ошибка: {e}")
-
+        
         print("=== Пробуем get_currencies() ===")
         try:
             resp = _client.get_currencies()
-            print(f"Ответ: {resp}")
             if hasattr(resp, 'instruments'):
                 print(f"Найдено валют: {len(resp.instruments)}")
-            elif hasattr(resp, 'payload'):
-                print(f"payload: {resp.payload}")
         except Exception as e:
             print(f"Ошибка: {e}")
-
-        print("=== Пробуем метод get_instruments() если есть ===")
-        if hasattr(_client, 'get_instruments'):
-            try:
-                resp = _client.get_instruments()
-                print(f"Ответ: {resp}")
-            except Exception as e:
-                print(f"Ошибка: {e}")
-        else:
-            print("Метод get_instruments отсутствует")
+        
+        print("=== Инициализация завершена ===")
     return _client
 
-# ... остальные функции (get_figi_by_ticker, get_candles) пока не нужны, 
-# но мы их оставим заглушками для компиляции
-
+# Заглушки для остальных функций, чтобы main.py не падал
 def get_figi_by_ticker(ticker: str):
-    # Временно возвращаем None, пока не отладим
+    print(f"[DEBUG] Запрос FIGI для {ticker}")
     return None
 
 def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
+    print(f"[DEBUG] Запрос свечей для {figi}, интервал: {interval_key}")
+    import pandas as pd
     return pd.DataFrame()
