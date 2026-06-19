@@ -3,3 +3,5 @@ ta>=0.10.0
 python-dotenv>=1.0.0
 requests>=2.31.0
 python-telegram-bot>=20.0
+grpcio>=1.39.0
+protobuf>=4.21.6
