@@ -1,3 +1,4 @@
+print("=== main.py START ===", flush=True)
 import logging
 import time
 from datetime import datetime, timedelta, timezone
