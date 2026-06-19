@@ -12,12 +12,15 @@ from database import init_db, save_signal
 from signal_cache import is_duplicate
 from tickers import TICKER_GROUPS, get_timeframes_for_ticker
 
+print("=== main.py запущен ===")
+print(f"TOKEN из data_fetch: {'УСТАНОВЛЕН' if TOKEN else 'НЕ УСТАНОВЛЕН'}")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
-SLEEP_SECONDS: int = 7200   # 2 часа
+SLEEP_SECONDS: int = 7200
 MAX_WORKERS: int = 8
 
 TIMEZONE_OFFSET = 4
@@ -95,10 +98,6 @@ def build_message(
 
 
 def safe_get_candles(figi: str, interval_key: str, days: int, ticker: str, max_retries: int = 2) -> Optional[pd.DataFrame]:
-    """
-    Получение свечей с повторными попытками при ошибках.
-    Использует общий перехват исключений (без зависимости от конкретных ошибок SDK).
-    """
     attempt_days = days
     for attempt in range(max_retries + 1):
         try:
@@ -109,7 +108,6 @@ def safe_get_candles(figi: str, interval_key: str, days: int, ticker: str, max_r
             if attempt == max_retries:
                 logging.error(f"Не удалось получить свечи для {figi} после {max_retries} попыток")
                 return None
-            # При ошибке уменьшаем количество дней для следующей попытки
             attempt_days = max(attempt_days // 2, 1)
             continue
     return None
@@ -149,7 +147,6 @@ def analyze_ticker(ticker: str) -> Optional[Dict[str, Any]]:
         logging.info(f"{ticker}: HOLD (score={day_signal['score']})")
         return None
 
-    # Проверяем, что сигнал day подтверждается другими таймфреймами (не противоречит)
     for tf, sig in all_signals.items():
         if tf == "day":
             continue
@@ -228,7 +225,9 @@ if __name__ == "__main__":
     if not TOKEN:
         raise RuntimeError("TINKOFF_INVEST_API_TOKEN не задан в .env")
     init_db()
+    print("=== Вызываем init_client ===")
     init_client(TOKEN)
+    print("=== init_client завершен ===")
 
     while True:
         try:
