@@ -84,8 +84,6 @@ def get_figi_by_ticker(ticker: str):
     return None
 
 def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
-    global _last_candle_request_time  # <-- объявляем глобальную переменную
-
     interval_map = {
         "day": "DAY",
         "week": "WEEK",
@@ -98,6 +96,7 @@ def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
 
     # Ограничение частоты запросов к свечам
     with _candles_lock:
+        global _last_candle_request_time
         now_time = time.time()
         time_since_last = now_time - _last_candle_request_time
         if time_since_last < _CANDLE_MIN_INTERVAL:
@@ -116,7 +115,8 @@ def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
             "interval": interval
         }
         try:
-            resp = _call_api("MarketDataService/Candles", payload)
+            # ИСПРАВЛЕНО: правильное имя метода – GetCandles
+            resp = _call_api("MarketDataService/GetCandles", payload)
             candles = resp.get("candles", [])
             if not candles:
                 logging.warning(f"Нет свечей для {figi} за {attempt_days} дней")
