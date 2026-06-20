@@ -84,6 +84,8 @@ def get_figi_by_ticker(ticker: str):
     return None
 
 def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
+    global _last_candle_request_time  # <-- объявляем глобальную переменную
+
     interval_map = {
         "day": "DAY",
         "week": "WEEK",
