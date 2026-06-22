@@ -28,7 +28,7 @@ _instruments_cache = None
 _instruments_lock = threading.Lock()
 _last_candle_request_time = 0.0
 _candles_lock = threading.Lock()
-_CANDLE_MIN_INTERVAL = 0.5  # сек между запросами свечей
+_CANDLE_MIN_INTERVAL = 1.2  # Увеличено до 1.2 секунды между запросами свечей
 
 def init_client(token: str):
     logging.info("REST API клиент инициализирован")
@@ -94,7 +94,7 @@ def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
     if not interval:
         raise ValueError(f"Неподдерживаемый интервал: {interval_key}")
 
-    # Ограничение частоты запросов к свечам
+    # Строгое ограничение частоты запросов к свечам
     with _candles_lock:
         global _last_candle_request_time
         now_time = time.time()
@@ -115,7 +115,6 @@ def get_candles(figi: str, interval_key: str, days: int, ticker: str = None):
             "interval": interval
         }
         try:
-            # ИСПРАВЛЕНО: правильное имя метода – GetCandles
             resp = _call_api("MarketDataService/GetCandles", payload)
             candles = resp.get("candles", [])
             if not candles:
