@@ -18,7 +18,7 @@ logging.basicConfig(
 )
 
 SLEEP_SECONDS: int = 7200   # 2 часа
-MAX_WORKERS: int = 8
+MAX_WORKERS: int = 2        # Уменьшено с 8 до 2 для снижения нагрузки на API
 
 TIMEZONE_OFFSET = 4
 WORK_START_HOUR = 8
