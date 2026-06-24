@@ -105,11 +105,11 @@ def get_candles(
 ):
 
     interval_map = {
-        "day": "DAY",
-        "week": "WEEK",
-        "4h": "4_HOUR",
-        "1h": "HOUR"
-    }
+    "day": "CANDLE_INTERVAL_DAY",
+    "week": "CANDLE_INTERVAL_WEEK",
+    "4h": "CANDLE_INTERVAL_4_HOUR",
+    "1h": "CANDLE_INTERVAL_HOUR"
+}
 
     interval = interval_map.get(interval_key)
 
@@ -122,11 +122,11 @@ def get_candles(
     from_time = now - timedelta(days=days)
 
     payload = {
-        "figi": figi,
-        "from": from_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "to": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "interval": interval
-    }
+    "instrumentId": figi,
+    "from": from_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "to": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "interval": interval
+}
 
     try:
 
