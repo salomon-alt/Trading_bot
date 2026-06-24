@@ -1,7 +1,7 @@
 import logging
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 
 from data_fetch import get_figi_by_ticker, get_candles, init_client, TOKEN
 from indicators import generate_signal
@@ -32,7 +32,6 @@ INTERVAL_DAYS = {
 def is_working_hours():
     now_utc = datetime.now(timezone.utc)
     now_local = now_utc + timedelta(hours=TIMEZONE_OFFSET)
-
     return WORK_START_HOUR <= now_local.hour < WORK_END_HOUR
 
 
@@ -103,13 +102,14 @@ def analyze_ticker(
     figi = get_figi_by_ticker(ticker)
 
     if not figi:
+        logging.warning(f"{ticker}: FIGI не найден")
         return None
 
     signals = {}
 
     for timeframe in get_timeframes_for_ticker(ticker):
 
-        days = INTERVAL_DAYS.get(timeframe, 365)
+        days = INTERVAL_DAYS.get(timeframe, 90)
 
         df = get_candles(
             figi,
@@ -125,9 +125,23 @@ def analyze_ticker(
             )
             return None
 
-        signals[timeframe] = generate_signal(df)
+        signal_data = generate_signal(df)
+
+        logging.info(
+            f"{ticker} {timeframe}: "
+            f"{signal_data['signal']} "
+            f"score={signal_data['score']}"
+        )
+
+        signals[timeframe] = signal_data
 
     day_signal = signals["day"]
+
+    logging.info(
+        f"{ticker}: итоговый дневной сигнал "
+        f"{day_signal['signal']} "
+        f"score={day_signal['score']}"
+    )
 
     if day_signal["signal"] == "HOLD":
         return None
@@ -141,13 +155,26 @@ def analyze_ticker(
                 day_signal["signal"] == "BUY"
                 and sig["signal"] == "SELL"
         ):
+            logging.info(
+                f"{ticker}: отклонён "
+                f"(day=BUY, {tf}=SELL)"
+            )
             return None
 
         if (
                 day_signal["signal"] == "SELL"
                 and sig["signal"] == "BUY"
         ):
+            logging.info(
+                f"{ticker}: отклонён "
+                f"(day=SELL, {tf}=BUY)"
+            )
             return None
+
+    logging.info(
+        f"{ticker}: прошёл фильтр "
+        f"{day_signal['signal']}"
+    )
 
     return {
         "ticker": ticker,
@@ -166,9 +193,17 @@ def main_loop():
     for tickers in TICKER_GROUPS.values():
         all_tickers.extend(tickers)
 
+    logging.info(
+        f"Всего тикеров для анализа: {len(all_tickers)}"
+    )
+
     for ticker in all_tickers:
 
         try:
+
+            logging.info(
+                f"Начинаем анализ {ticker}"
+            )
 
             result = analyze_ticker(ticker)
 
@@ -182,6 +217,10 @@ def main_loop():
             )
 
         time.sleep(2)
+
+    logging.info(
+        f"Найдено сигналов: {len(results)}"
+    )
 
     if not results:
 
@@ -210,6 +249,9 @@ def main_loop():
                 "DAY",
                 signal
         ):
+            logging.info(
+                f"{ticker}: дубликат сигнала"
+            )
             continue
 
         day = result["signals"]["day"]
