@@ -22,10 +22,10 @@ WORK_START_HOUR = 8
 WORK_END_HOUR = 20
 
 INTERVAL_DAYS = {
-    "week": 730,
-    "day": 365,
-    "4h": 120,
-    "1h": 30,
+    "week": 180,
+    "day": 90,
+    "4h": 30,
+    "1h": 7,
 }
 
 
