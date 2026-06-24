@@ -34,21 +34,35 @@ def init_client(token: str):
     logging.info("REST API клиент инициализирован")
     return _session
 
-def _call_api(method: str, data: dict = None, retries: int = 2) -> dict:
+def _call_api(method: str, data: dict = None):
     url = BASE_URL + method
-    for attempt in range(retries + 1):
-        try:
-            resp = _session.post(url, json=data or {})
-            resp.raise_for_status()
-            return resp.json()
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 429:
-                wait = 2 ** (attempt + 1)
-                logging.warning(f"Ошибка 429. Ждём {wait} сек.")
-                time.sleep(wait)
-                continue
-            raise
-    raise Exception(f"Не удалось выполнить запрос после {retries} попыток")
+
+    resp = _session.post(
+        url,
+        json=data or {}
+    )
+
+    if resp.status_code != 200:
+
+        logging.error(
+            f"URL: {url}"
+        )
+
+        logging.error(
+            f"REQUEST: {data}"
+        )
+
+        logging.error(
+            f"STATUS: {resp.status_code}"
+        )
+
+        logging.error(
+            f"RESPONSE: {resp.text}"
+        )
+
+        resp.raise_for_status()
+
+    return resp.json()
 
 def _load_all_instruments():
     global _instruments_cache
