@@ -1,11 +1,11 @@
+import logging
 import pandas as pd
 import ta
 
 
 def generate_signal(df: pd.DataFrame):
 
-    # Полностью пустой DataFrame
-    if df.empty:
+    if df is None or len(df) == 0:
         return {
             "signal": "HOLD",
             "score": 0,
@@ -20,10 +20,14 @@ def generate_signal(df: pd.DataFrame):
             "reasons": []
         }
 
-    # Недостаточно свечей
-    if len(df) < 60:
+    logging.info(f"Свечей получено: {len(df)}")
 
-        last_price = float(df["close"].iloc[-1])
+    if len(df) < 30:
+
+        price = 0
+
+        if len(df):
+            price = float(df["close"].iloc[-1])
 
         return {
             "signal": "HOLD",
@@ -31,7 +35,7 @@ def generate_signal(df: pd.DataFrame):
             "score_buy": 0,
             "score_sell": 0,
             "trend": "UNKNOWN",
-            "price": round(last_price, 2),
+            "price": round(price, 2),
             "rsi": 0,
             "adx": 0,
             "stop": None,
@@ -43,19 +47,18 @@ def generate_signal(df: pd.DataFrame):
 
     try:
 
-        # RSI
         df["rsi"] = ta.momentum.RSIIndicator(
             close=df["close"],
             window=14
         ).rsi()
 
-        # MACD
-        macd = ta.trend.MACD(close=df["close"])
+        macd = ta.trend.MACD(
+            close=df["close"]
+        )
 
         df["macd"] = macd.macd()
         df["macd_signal"] = macd.macd_signal()
 
-        # EMA
         ema_long = 200 if len(df) >= 200 else 100
 
         df["ema50"] = ta.trend.EMAIndicator(
@@ -68,7 +71,6 @@ def generate_signal(df: pd.DataFrame):
             window=ema_long
         ).ema_indicator()
 
-        # ADX
         df["adx"] = ta.trend.ADXIndicator(
             high=df["high"],
             low=df["low"],
@@ -76,7 +78,6 @@ def generate_signal(df: pd.DataFrame):
             window=14
         ).adx()
 
-        # ATR
         df["atr"] = ta.volatility.AverageTrueRange(
             high=df["high"],
             low=df["low"],
@@ -84,14 +85,12 @@ def generate_signal(df: pd.DataFrame):
             window=14
         ).average_true_range()
 
-        # Средний объём
         df["volume_sma"] = (
             df["volume"]
             .rolling(20)
             .mean()
         )
 
-        # Bollinger
         bb = ta.volatility.BollingerBands(
             close=df["close"],
             window=20,
@@ -102,40 +101,24 @@ def generate_signal(df: pd.DataFrame):
         df["bb_low"] = bb.bollinger_lband()
         df["bb_mid"] = bb.bollinger_mavg()
 
-        df = df.dropna()
+        df = df.tail(50)
 
-        # После расчёта индикаторов всё удалилось
-        if df.empty:
+        df = df.fillna(method="bfill")
+        df = df.fillna(method="ffill")
 
-            last_price = float(
-                df["close"].iloc[-1]
-            ) if "close" in df.columns and len(df) else 0
-
-            return {
-                "signal": "HOLD",
-                "score": 0,
-                "score_buy": 0,
-                "score_sell": 0,
-                "trend": "UNKNOWN",
-                "price": last_price,
-                "rsi": 0,
-                "adx": 0,
-                "stop": None,
-                "take": None,
-                "reasons": []
-            }
+        logging.info(
+            f"После индикаторов осталось строк: {len(df)}"
+        )
 
         if len(df) < 2:
 
-            last_price = float(df["close"].iloc[-1])
-
             return {
                 "signal": "HOLD",
                 "score": 0,
                 "score_buy": 0,
                 "score_sell": 0,
                 "trend": "UNKNOWN",
-                "price": round(last_price, 2),
+                "price": float(df["close"].iloc[-1]),
                 "rsi": 0,
                 "adx": 0,
                 "stop": None,
@@ -154,109 +137,150 @@ def generate_signal(df: pd.DataFrame):
 
         trend = "UNKNOWN"
 
-        # EMA
         if last["ema50"] > last["ema_long"]:
-            score_buy += 25
-            trend = "UP"
-            buy_reasons.append("EMA50 выше EMA200")
-        else:
-            score_sell += 25
-            trend = "DOWN"
-            sell_reasons.append("EMA50 ниже EMA200")
 
-        # MACD
+            trend = "UP"
+
+            score_buy += 25
+
+            buy_reasons.append(
+                "EMA50 выше EMA100/200"
+            )
+
+        else:
+
+            trend = "DOWN"
+
+            score_sell += 25
+
+            sell_reasons.append(
+                "EMA50 ниже EMA100/200"
+            )
+
         if (
             prev["macd"] < prev["macd_signal"]
-            and last["macd"] > last["macd_signal"]
+            and
+            last["macd"] > last["macd_signal"]
         ):
-            score_buy += 25
-            buy_reasons.append("MACD бычий крест")
+
+            score_buy += 20
+
+            buy_reasons.append(
+                "MACD бычье пересечение"
+            )
 
         if (
             prev["macd"] > prev["macd_signal"]
-            and last["macd"] < last["macd_signal"]
+            and
+            last["macd"] < last["macd_signal"]
         ):
-            score_sell += 25
-            sell_reasons.append("MACD медвежий крест")
 
-        # RSI
-        if 35 <= last["rsi"] <= 60:
+            score_sell += 20
+
+            sell_reasons.append(
+                "MACD медвежье пересечение"
+            )
+
+        if last["rsi"] < 35:
+
             score_buy += 15
-            buy_reasons.append("RSI в нейтральной зоне")
 
-        if last["rsi"] >= 70:
+            buy_reasons.append(
+                "RSI перепродан"
+            )
+
+        elif last["rsi"] > 70:
+
             score_sell += 15
-            sell_reasons.append("RSI перекуплен")
 
-        # ADX
+            sell_reasons.append(
+                "RSI перекуплен"
+            )
+
+        else:
+
+            if trend == "UP":
+                score_buy += 10
+            else:
+                score_sell += 10
+
         if last["adx"] > 25:
 
             if trend == "UP":
-                score_buy += 15
-                buy_reasons.append("Сильный тренд (ADX)")
-            else:
-                score_sell += 15
-                sell_reasons.append("Сильный тренд (ADX)")
 
-        # Объём
+                score_buy += 15
+
+                buy_reasons.append(
+                    "Сильный тренд ADX"
+                )
+
+            else:
+
+                score_sell += 15
+
+                sell_reasons.append(
+                    "Сильный тренд ADX"
+                )
+
         if pd.notna(last["volume_sma"]):
 
             vol_ratio = (
                 last["volume"]
-                / last["volume_sma"]
+                / max(last["volume_sma"], 1)
             )
 
-            if vol_ratio > 1:
+            if vol_ratio > 1.2:
 
                 if trend == "UP":
+
                     score_buy += 10
-                    buy_reasons.append("Объём выше среднего")
+
+                    buy_reasons.append(
+                        "Повышенный объём"
+                    )
+
                 else:
+
                     score_sell += 10
-                    sell_reasons.append("Объём выше среднего")
 
-        # ATR
-        atr_percent = (
-            last["atr"]
-            / last["close"]
-        ) * 100
+                    sell_reasons.append(
+                        "Повышенный объём"
+                    )
 
-        if atr_percent > 1:
-
-            if trend == "UP":
-                score_buy += 10
-                buy_reasons.append("Высокая волатильность")
-            else:
-                score_sell += 10
-                sell_reasons.append("Высокая волатильность")
-
-        # Bollinger
         if (
+            pd.notna(last["bb_low"])
+            and
             last["close"] <= last["bb_low"]
-            and last["close"] > prev["close"]
         ):
-            score_buy += 15
+
+            score_buy += 10
+
             buy_reasons.append(
-                "Отскок от нижней полосы Боллинджера"
+                "Нижняя полоса Боллинджера"
             )
 
         if (
+            pd.notna(last["bb_high"])
+            and
             last["close"] >= last["bb_high"]
-            and last["close"] < prev["close"]
         ):
-            score_sell += 15
+
+            score_sell += 10
+
             sell_reasons.append(
-                "Отскок от верхней полосы Боллинджера"
+                "Верхняя полоса Боллинджера"
             )
 
         signal = "HOLD"
         reasons = []
 
         if score_buy >= 50:
+
             signal = "BUY"
             reasons = buy_reasons
 
         elif score_sell >= 50:
+
             signal = "SELL"
             reasons = sell_reasons
 
@@ -264,41 +288,90 @@ def generate_signal(df: pd.DataFrame):
         take = None
 
         if signal == "BUY":
-            stop = last["close"] - last["atr"] * 2
-            take = last["close"] + last["atr"] * 4
+
+            stop = (
+                last["close"]
+                - last["atr"] * 2
+            )
+
+            take = (
+                last["close"]
+                + last["atr"] * 4
+            )
 
         elif signal == "SELL":
-            stop = last["close"] + last["atr"] * 2
-            take = last["close"] - last["atr"] * 4
 
-        score = max(score_buy, score_sell)
+            stop = (
+                last["close"]
+                + last["atr"] * 2
+            )
+
+            take = (
+                last["close"]
+                - last["atr"] * 4
+            )
+
+        score = max(
+            score_buy,
+            score_sell
+        )
 
         return {
+
             "signal": signal,
+
             "score": round(score),
+
             "score_buy": round(score_buy),
+
             "score_sell": round(score_sell),
+
             "trend": trend,
-            "price": round(float(last["close"]), 2),
-            "rsi": round(float(last["rsi"]), 2),
-            "adx": round(float(last["adx"]), 2),
-            "stop": round(float(stop), 2) if stop else None,
-            "take": round(float(take), 2) if take else None,
+
+            "price": round(
+                float(last["close"]),
+                2
+            ),
+
+            "rsi": round(
+                float(last["rsi"]),
+                2
+            ),
+
+            "adx": round(
+                float(last["adx"]),
+                2
+            ),
+
+            "stop": round(
+                float(stop),
+                2
+            ) if stop else None,
+
+            "take": round(
+                float(take),
+                2
+            ) if take else None,
+
             "reasons": reasons
         }
 
     except Exception as e:
+
+        logging.exception(
+            f"Ошибка indicators.py: {e}"
+        )
 
         return {
             "signal": "HOLD",
             "score": 0,
             "score_buy": 0,
             "score_sell": 0,
-            "trend": "ERROR",
+            "trend": "UNKNOWN",
             "price": 0,
             "rsi": 0,
             "adx": 0,
             "stop": None,
             "take": None,
-            "reasons": [str(e)]
+            "reasons": []
         }
