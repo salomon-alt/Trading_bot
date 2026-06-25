@@ -156,31 +156,50 @@ def get_candles(
 
         rows = []
 
-        for c in candles:
+for c in candles:
 
-            rows.append({
-                "time": c["time"],
-                "open": float(c["open"]["units"]) + float(c["open"]["nano"]) / 1e9,
-                "high": float(c["high"]["units"]) + float(c["high"]["nano"]) / 1e9,
-                "low": float(c["low"]["units"]) + float(c["low"]["nano"]) / 1e9,
-                "close": float(c["close"]["units"]) + float(c["close"]["nano"]) / 1e9,
-                "volume": c["volume"]
-            })
+    rows.append({
+        "time": c["time"],
 
-        df = pd.DataFrame(rows)
+        "open": float(c["open"]["units"]) +
+                float(c["open"]["nano"]) / 1e9,
 
-        if not df.empty:
-            df.sort_values(
-                "time",
-                inplace=True
-            )
+        "high": float(c["high"]["units"]) +
+                float(c["high"]["nano"]) / 1e9,
 
-        return df.reset_index(drop=True)
+        "low": float(c["low"]["units"]) +
+               float(c["low"]["nano"]) / 1e9,
+
+        "close": float(c["close"]["units"]) +
+                 float(c["close"]["nano"]) / 1e9,
+
+        "volume": float(c.get("volume", 0))
+    })
+
+df = pd.DataFrame(rows)
+
+numeric_cols = [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+]
+
+for col in numeric_cols:
+    df[col] = pd.to_numeric(
+        df[col],
+        errors="coerce"
+    )
+
+df = df.dropna()
 
     except Exception as e:
 
-        logging.error(
-            f"{ticker} {interval_key}: {e}"
-        )
+        logging.info(
+    f"Свечей получено: {len(df)}"
+)
 
-        return pd.DataFrame()
+logging.info(
+    f"Тип volume: {df['volume'].dtype}"
+)
