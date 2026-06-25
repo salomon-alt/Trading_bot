@@ -2,22 +2,35 @@ import os
 import logging
 import time
 import threading
+from datetime import datetime, timedelta
+
 import pandas as pd
 import requests
-from datetime import datetime, timedelta
 from dotenv import load_dotenv
+
 from figi_cache import FIGI_CACHE
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
 
 load_dotenv()
-TOKEN = os.getenv("TINKOFF_INVEST_API_TOKEN")
-if not TOKEN:
-    raise RuntimeError("TINKOFF_INVEST_API_TOKEN не задан в .env")
 
-BASE_URL = "https://invest-public-api.tinkoff.ru/rest/tinkoff.public.invest.api.contract.v1."
+TOKEN = os.getenv("TINKOFF_INVEST_API_TOKEN")
+
+if not TOKEN:
+    raise RuntimeError(
+        "TINKOFF_INVEST_API_TOKEN не задан"
+    )
+
+BASE_URL = (
+    "https://invest-public-api.tinkoff.ru/rest/"
+    "tinkoff.public.invest.api.contract.v1."
+)
 
 _session = requests.Session()
+
 _session.headers.update({
     "Authorization": f"Bearer {TOKEN}",
     "Content-Type": "application/json",
@@ -26,15 +39,23 @@ _session.headers.update({
 
 _instruments_cache = None
 _instruments_lock = threading.Lock()
+
 _last_candle_request_time = 0.0
 _candles_lock = threading.Lock()
-_CANDLE_MIN_INTERVAL = 1.2  # Увеличено до 1.2 секунды между запросами свечей
+
 
 def init_client(token: str):
-    logging.info("REST API клиент инициализирован")
+    logging.info(
+        "REST API клиент инициализирован"
+    )
     return _session
 
-def _call_api(method: str, data: dict = None):
+
+def _call_api(
+        method: str,
+        data: dict = None
+):
+
     url = BASE_URL + method
 
     resp = _session.post(
@@ -64,38 +85,89 @@ def _call_api(method: str, data: dict = None):
 
     return resp.json()
 
+
 def _load_all_instruments():
+
     global _instruments_cache
+
     if _instruments_cache is not None:
         return _instruments_cache
+
     with _instruments_lock:
+
         if _instruments_cache is not None:
             return _instruments_cache
+
         instruments = []
-        for method in ["Shares", "Currencies", "Bonds", "Etfs"]:
+
+        for method in [
+            "Shares",
+            "Currencies",
+            "Bonds",
+            "Etfs"
+        ]:
+
             try:
-                resp = _call_api(f"InstrumentsService/{method}")
-                for item in resp.get("instruments", []):
+
+                resp = _call_api(
+                    f"InstrumentsService/{method}"
+                )
+
+                for item in resp.get(
+                        "instruments",
+                        []
+                ):
+
                     instruments.append({
                         "ticker": item["ticker"],
                         "figi": item["figi"]
                     })
-                logging.info(f"Загружено {method}: {len(instruments)}")
+
+                logging.info(
+                    f"Загружено {method}: "
+                    f"{len(instruments)}"
+                )
+
             except Exception as e:
-                logging.error(f"Ошибка {method}: {e}")
+
+                logging.error(
+                    f"Ошибка {method}: {e}"
+                )
+
         _instruments_cache = instruments
+
         return instruments
 
-def get_figi_by_ticker(ticker: str):
+
+def get_figi_by_ticker(
+        ticker: str
+):
+
     if ticker in FIGI_CACHE:
         return FIGI_CACHE[ticker]
+
     instruments = _load_all_instruments()
+
     for inst in instruments:
-        if inst["ticker"].upper() == ticker.upper():
-            FIGI_CACHE[ticker] = inst["figi"]
+
+        if (
+                inst["ticker"].upper()
+                ==
+                ticker.upper()
+        ):
+
+            FIGI_CACHE[ticker] = (
+                inst["figi"]
+            )
+
             return inst["figi"]
-    logging.warning(f"{ticker}: FIGI не найден")
+
+    logging.warning(
+        f"{ticker}: FIGI не найден"
+    )
+
     return None
+
 
 def get_candles(
         figi: str,
@@ -105,28 +177,42 @@ def get_candles(
 ):
 
     interval_map = {
-    "day": "CANDLE_INTERVAL_DAY",
-    "week": "CANDLE_INTERVAL_WEEK",
-    "4h": "CANDLE_INTERVAL_4_HOUR",
-    "1h": "CANDLE_INTERVAL_HOUR"
-}
+        "week": "CANDLE_INTERVAL_WEEK",
+        "day": "CANDLE_INTERVAL_DAY",
+        "4h": "CANDLE_INTERVAL_4_HOUR",
+        "1h": "CANDLE_INTERVAL_HOUR"
+    }
 
-    interval = interval_map.get(interval_key)
+    interval = interval_map.get(
+        interval_key
+    )
 
     if not interval:
-        logging.error(f"Неизвестный интервал {interval_key}")
+
+        logging.error(
+            f"Неизвестный интервал "
+            f"{interval_key}"
+        )
+
         return pd.DataFrame()
 
     now = datetime.utcnow()
 
-    from_time = now - timedelta(days=days)
+    from_time = (
+        now -
+        timedelta(days=days)
+    )
 
     payload = {
-    "instrumentId": figi,
-    "from": from_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "to": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "interval": interval
-}
+        "figi": figi,
+        "from": from_time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        ),
+        "to": now.strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        ),
+        "interval": interval
+    }
 
     try:
 
@@ -134,72 +220,137 @@ def get_candles(
 
             global _last_candle_request_time
 
-            diff = time.time() - _last_candle_request_time
+            diff = (
+                time.time()
+                -
+                _last_candle_request_time
+            )
 
             if diff < 2:
                 time.sleep(2 - diff)
 
-            _last_candle_request_time = time.time()
+            _last_candle_request_time = (
+                time.time()
+            )
 
         resp = _call_api(
             "MarketDataService/GetCandles",
             payload
         )
 
-        candles = resp.get("candles", [])
+        candles = resp.get(
+            "candles",
+            []
+        )
 
         if not candles:
+
             logging.warning(
-                f"{ticker}: нет свечей для {interval_key}"
+                f"{ticker}: "
+                f"нет свечей "
+                f"{interval_key}"
             )
+
             return pd.DataFrame()
 
         rows = []
 
-for c in candles:
+        for c in candles:
 
-    rows.append({
-        "time": c["time"],
+            rows.append({
 
-        "open": float(c["open"]["units"]) +
-                float(c["open"]["nano"]) / 1e9,
+                "time":
+                    c["time"],
 
-        "high": float(c["high"]["units"]) +
-                float(c["high"]["nano"]) / 1e9,
+                "open":
+                    float(
+                        c["open"]["units"]
+                    ) +
+                    float(
+                        c["open"]["nano"]
+                    ) / 1e9,
 
-        "low": float(c["low"]["units"]) +
-               float(c["low"]["nano"]) / 1e9,
+                "high":
+                    float(
+                        c["high"]["units"]
+                    ) +
+                    float(
+                        c["high"]["nano"]
+                    ) / 1e9,
 
-        "close": float(c["close"]["units"]) +
-                 float(c["close"]["nano"]) / 1e9,
+                "low":
+                    float(
+                        c["low"]["units"]
+                    ) +
+                    float(
+                        c["low"]["nano"]
+                    ) / 1e9,
 
-        "volume": float(c.get("volume", 0))
-    })
+                "close":
+                    float(
+                        c["close"]["units"]
+                    ) +
+                    float(
+                        c["close"]["nano"]
+                    ) / 1e9,
 
-df = pd.DataFrame(rows)
+                "volume":
+                    float(
+                        c.get(
+                            "volume",
+                            0
+                        )
+                    )
+            })
 
-numeric_cols = [
-    "open",
-    "high",
-    "low",
-    "close",
-    "volume"
-]
+        df = pd.DataFrame(rows)
 
-for col in numeric_cols:
-    df[col] = pd.to_numeric(
-        df[col],
-        errors="coerce"
-    )
+        numeric_cols = [
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume"
+        ]
 
-df = df.dropna()
+        for col in numeric_cols:
+
+            df[col] = pd.to_numeric(
+                df[col],
+                errors="coerce"
+            )
+
+        df = df.dropna()
+
+        if not df.empty:
+
+            df.sort_values(
+                "time",
+                inplace=True
+            )
+
+        logging.info(
+            f"Свечей получено: "
+            f"{len(df)}"
+        )
+
+        logging.info(
+            f"Тип volume: "
+            f"{df['volume'].dtype}"
+        )
+
+        return (
+            df.reset_index(
+                drop=True
+            )
+        )
 
     except Exception as e:
 
-        logging.info(
-    f"Свечей получено: {len(df)}"
-)
+        logging.error(
+            f"{ticker} "
+            f"{interval_key}: "
+            f"{e}"
+        )
 
-logging.info(
-    f"Тип volume: {df['volume'].dtype}"
-)
+        return pd.DataFrame()
