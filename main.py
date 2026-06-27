@@ -1,14 +1,36 @@
 import logging
 import time
-from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, Optional
 
-from data_fetch import get_figi_by_ticker, get_candles, init_client, TOKEN
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
+
+from typing import Dict
+from typing import Any
+from typing import Optional
+
+from data_fetch import (
+    get_figi_by_ticker,
+    get_candles,
+    init_client,
+    TOKEN
+)
+
 from indicators import generate_signal
+
 from telegram_bot import send_signal
-from database import init_db, save_signal
+
+from database import (
+    init_db,
+    save_signal
+)
+
 from signal_cache import is_duplicate
-from tickers import TICKER_GROUPS, get_timeframes_for_ticker
+
+from tickers import (
+    TICKER_GROUPS,
+    get_timeframes_for_ticker
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,82 +40,183 @@ logging.basicConfig(
 SLEEP_SECONDS = 7200
 
 TIMEZONE_OFFSET = 4
+
 WORK_START_HOUR = 8
 WORK_END_HOUR = 20
 
 INTERVAL_DAYS = {
-    "week": 180,
-    "day": 90,
-    "4h": 30,
-    "1h": 7,
+
+    "week": 365,
+
+    "day": 180,
+
+    "4h": 60,
+
+    "1h": 14
+
 }
+
+# ==========================================================
+# Веса таймфреймов
+# ==========================================================
+
+TIMEFRAME_WEIGHTS = {
+
+    "week": 40,
+
+    "day": 30,
+
+    "4h": 20,
+
+    "1h": 10
+
+}
+
+# ==========================================================
+# Минимальная уверенность
+# ==========================================================
+
+MIN_TOTAL_SCORE = 60
+
+MIN_ADX_WEEK = 20
+
+MIN_DAY_SCORE = 60
+
+# ==========================================================
+# Рабочее время
+# ==========================================================
 
 
 def is_working_hours():
+
     now_utc = datetime.now(timezone.utc)
-    now_local = now_utc + timedelta(hours=TIMEZONE_OFFSET)
-    return WORK_START_HOUR <= now_local.hour < WORK_END_HOUR
+
+    now_local = (
+        now_utc +
+        timedelta(hours=TIMEZONE_OFFSET)
+    )
+
+    return (
+        WORK_START_HOUR
+        <= now_local.hour <
+        WORK_END_HOUR
+    )
 
 
 def seconds_until_work_start():
+
     now_utc = datetime.now(timezone.utc)
-    now_local = now_utc + timedelta(hours=TIMEZONE_OFFSET)
+
+    now_local = (
+        now_utc +
+        timedelta(hours=TIMEZONE_OFFSET)
+    )
 
     target = now_local.replace(
+
         hour=WORK_START_HOUR,
+
         minute=0,
+
         second=0,
+
         microsecond=0
+
     )
 
     if now_local.hour >= WORK_END_HOUR:
+
         target += timedelta(days=1)
 
-    return int((target - now_local).total_seconds())
+    return int(
 
+        (
+            target -
+            now_local
+        ).total_seconds()
 
-def build_message(
-        ticker: str,
-        signals: Dict[str, Dict[str, Any]]
-):
-    day = signals["day"]
-
-    icon = "🟢" if day["signal"] == "BUY" else "🔴"
-
-    text = (
-        f"{icon} {day['signal']}\n\n"
-        f"Тикер: {ticker}\n"
-        f"Рейтинг: {day['score']}/100\n\n"
-        f"Цена: {day['price']}\n"
-        f"RSI: {day['rsi']}\n"
-        f"ADX: {day['adx']}\n"
-        f"Стоп: {day['stop']}\n"
-        f"Цель: {day['take']}\n"
     )
 
-    text += "\nТаймфреймы:\n"
+# ==========================================================
+# Звезды
+# ==========================================================
 
-    for tf in ["week", "day", "4h", "1h"]:
-        if tf in signals:
-            text += (
-                f"{tf.upper()}: "
-                f"{signals[tf]['signal']} "
-                f"({signals[tf]['score']})\n"
-            )
 
-    if day["reasons"]:
-        text += "\nПричины:\n"
+def stars(score):
 
-        for reason in day["reasons"]:
-            text += f"✓ {reason}\n"
+    if score >= 90:
 
-    text += (
-        f"\n"
-        f"{datetime.now().strftime('%d.%m.%Y %H:%M')}"
-    )
+        return "★★★★★"
 
-    return text
+    if score >= 75:
 
+        return "★★★★☆"
+
+    if score >= 60:
+
+        return "★★★☆☆"
+
+    if score >= 40:
+
+        return "★★☆☆☆"
+
+    return "★☆☆☆☆"
+
+
+# ==========================================================
+# Расчет общей уверенности
+# ==========================================================
+
+
+def calculate_total_score(signals):
+
+    buy = 0
+
+    sell = 0
+
+    for tf, weight in TIMEFRAME_WEIGHTS.items():
+
+        if tf not in signals:
+
+            continue
+
+        sig = signals[tf]
+
+        if sig["signal"] == "BUY":
+
+            buy += weight
+
+        elif sig["signal"] == "SELL":
+
+            sell += weight
+
+    direction = "HOLD"
+
+    score = max(buy, sell)
+
+    if buy > sell:
+
+        direction = "BUY"
+
+    elif sell > buy:
+
+        direction = "SELL"
+
+    return {
+
+        "signal": direction,
+
+        "score": score,
+
+        "buy": buy,
+
+        "sell": sell
+
+    }
+
+# ==========================================================
+# Анализ инструмента
+# ==========================================================
 
 def analyze_ticker(
         ticker: str
@@ -102,14 +225,25 @@ def analyze_ticker(
     figi = get_figi_by_ticker(ticker)
 
     if not figi:
-        logging.warning(f"{ticker}: FIGI не найден")
+
+        logging.warning(
+            f"{ticker}: FIGI не найден"
+        )
+
         return None
 
     signals = {}
 
+    # ---------------------------------------
+    # Получаем сигналы всех таймфреймов
+    # ---------------------------------------
+
     for timeframe in get_timeframes_for_ticker(ticker):
 
-        days = INTERVAL_DAYS.get(timeframe, 90)
+        days = INTERVAL_DAYS.get(
+            timeframe,
+            90
+        )
 
         df = get_candles(
             figi,
@@ -119,207 +253,386 @@ def analyze_ticker(
         )
 
         if df.empty:
+
             logging.info(
-                f"{ticker}: "
-                f"{timeframe} данные не получены"
+                f"{ticker}: нет данных {timeframe}"
             )
+
             return None
 
-        signal_data = generate_signal(df)
+        signal = generate_signal(df)
+
+        signals[timeframe] = signal
 
         logging.info(
-            f"{ticker} {timeframe}: "
-            f"{signal_data['signal']} "
-            f"score={signal_data['score']}"
+
+            f"{ticker} "
+
+            f"{timeframe}: "
+
+            f"{signal['signal']} "
+
+            f"score={signal['score']}"
+
         )
 
-        signals[timeframe] = signal_data
+    # ---------------------------------------
+    # Проверяем наличие всех ТФ
+    # ---------------------------------------
 
-    day_signal = signals["day"]
+    required = [
+        "week",
+        "day",
+        "4h",
+        "1h"
+    ]
 
-    logging.info(
-        f"{ticker}: итоговый дневной сигнал "
-        f"{day_signal['signal']} "
-        f"score={day_signal['score']}"
-    )
+    for tf in required:
 
-    if day_signal["signal"] == "HOLD":
+        if tf not in signals:
+
+            logging.info(
+                f"{ticker}: отсутствует {tf}"
+            )
+
+            return None
+
+    week = signals["week"]
+
+    day = signals["day"]
+
+    h4 = signals["4h"]
+
+    h1 = signals["1h"]
+
+    # ---------------------------------------
+    # Если Day HOLD —
+    # инструмент сразу отбрасываем
+    # ---------------------------------------
+
+    if day["signal"] == "HOLD":
+
+        logging.info(
+
+            f"{ticker}: "
+
+            f"DAY = HOLD"
+
+        )
+
         return None
 
-    for tf, sig in signals.items():
+    # ---------------------------------------
+    # Недельный график должен иметь
+    # выраженный тренд
+    # ---------------------------------------
 
-        if tf == "day":
-            continue
+    if week["adx"] < MIN_ADX_WEEK:
 
-        if (
-                day_signal["signal"] == "BUY"
-                and sig["signal"] == "SELL"
-        ):
-            logging.info(
-                f"{ticker}: отклонён "
-                f"(day=BUY, {tf}=SELL)"
-            )
-            return None
+        logging.info(
 
-        if (
-                day_signal["signal"] == "SELL"
-                and sig["signal"] == "BUY"
-        ):
-            logging.info(
-                f"{ticker}: отклонён "
-                f"(day=SELL, {tf}=BUY)"
-            )
-            return None
+            f"{ticker}: "
+
+            f"Week ADX={week['adx']} "
+
+            f"< {MIN_ADX_WEEK}"
+
+        )
+
+        return None
+
+    # ---------------------------------------
+    # Дневной сигнал должен быть сильным
+    # ---------------------------------------
+
+    if day["score"] < MIN_DAY_SCORE:
+
+        logging.info(
+
+            f"{ticker}: "
+
+            f"Day score "
+
+            f"{day['score']}"
+
+        )
+
+        return None
+
+    # =====================================================
+    # Согласование таймфреймов
+    # =====================================================
+
+    # Week имеет высший приоритет.
+    # Если Week уже имеет направление,
+    # Day обязан совпадать.
+
+    if (
+        week["signal"] != "HOLD"
+        and
+        week["signal"] != day["signal"]
+    ):
+
+        logging.info(
+
+            f"{ticker}: "
+
+            f"Week={week['signal']} "
+
+            f"Day={day['signal']}"
+
+        )
+
+        return None
+
+    # ---------------------------------------------
+    # 4H должен подтверждать Day.
+    # HOLD допускается.
+    # ---------------------------------------------
+
+    if (
+        h4["signal"] != "HOLD"
+        and
+        h4["signal"] != day["signal"]
+    ):
+
+        logging.info(
+
+            f"{ticker}: "
+
+            f"4H против Day"
+
+        )
+
+        return None
+
+    # ---------------------------------------------
+    # 1H используется как подтверждение
+    # точки входа.
+    # ---------------------------------------------
+
+    if (
+        h1["signal"] != "HOLD"
+        and
+        h1["signal"] != day["signal"]
+    ):
+
+        logging.info(
+
+            f"{ticker}: "
+
+            f"1H против Day"
+
+        )
+
+        return None
+
+    # =====================================================
+    # Расчет общей уверенности
+    # =====================================================
+
+    total = calculate_total_score(
+        signals
+    )
 
     logging.info(
-        f"{ticker}: прошёл фильтр "
-        f"{day_signal['signal']}"
+
+        f"{ticker}: "
+
+        f"BUY={total['buy']} "
+
+        f"SELL={total['sell']} "
+
+        f"TOTAL={total['score']}"
+
+    )
+
+    # ---------------------------------------------
+    # Направление должно совпадать
+    # ---------------------------------------------
+
+    if total["signal"] != day["signal"]:
+
+        logging.info(
+
+            f"{ticker}: "
+
+            f"Несогласованность"
+
+        )
+
+        return None
+
+    # ---------------------------------------------
+    # Слабые сигналы не отправляем
+    # ---------------------------------------------
+
+    if total["score"] < MIN_TOTAL_SCORE:
+
+        logging.info(
+
+            f"{ticker}: "
+
+            f"Слабый сигнал "
+
+            f"{total['score']}"
+
+        )
+
+        return None
+
+    logging.info(
+
+        f"{ticker}: "
+
+        f"Прошел фильтр "
+
+        f"{total['score']}/100"
+
     )
 
     return {
+
         "ticker": ticker,
-        "signals": signals
+
+        "signals": signals,
+
+        "rating": total["score"],
+
+        "direction": total["signal"],
+
+        "stars": stars(
+            total["score"]
+        )
+
     }
 
+# ==========================================================
+# Формирование сообщения Telegram
+# ==========================================================
 
-def main_loop():
+def build_message(
+        ticker: str,
+        result: Dict[str, Any]
+):
 
-    logging.info("=== Новый проход ===")
+    signals = result["signals"]
 
-    results = []
+    day = signals["day"]
 
-    all_tickers = []
+    direction = result["direction"]
 
-    for tickers in TICKER_GROUPS.values():
-        all_tickers.extend(tickers)
+    rating = result["rating"]
 
-    logging.info(
-        f"Всего тикеров для анализа: {len(all_tickers)}"
+    stars_text = result["stars"]
+
+    if direction == "BUY":
+
+        icon = "🟢"
+
+    elif direction == "SELL":
+
+        icon = "🔴"
+
+    else:
+
+        icon = "⚪"
+
+    text = (
+        f"{icon} <b>{direction}</b>\n\n"
+        f"📈 <b>{ticker}</b>\n\n"
+        f"⭐ {stars_text}\n"
+        f"🎯 Уверенность: <b>{rating}%</b>\n\n"
     )
 
-    for ticker in all_tickers:
-
-        try:
-
-            logging.info(
-                f"Начинаем анализ {ticker}"
-            )
-
-            result = analyze_ticker(ticker)
-
-            if result:
-                results.append(result)
-
-        except Exception as e:
-
-            logging.exception(
-                f"{ticker}: {e}"
-            )
-
-        time.sleep(2)
-
-    logging.info(
-        f"Найдено сигналов: {len(results)}"
+    text += (
+        f"💰 Цена: {day['price']}\n"
+        f"📊 RSI: {day['rsi']}\n"
+        f"📈 ADX: {day['adx']}\n"
     )
 
-    if not results:
+    if day["stop"]:
 
-        logging.info(
-            "Подходящих сигналов не найдено"
+        text += (
+            f"🛑 Stop: {day['stop']}\n"
         )
 
-        return
+    if day["take"]:
 
-    results.sort(
-        key=lambda x:
-        x["signals"]["day"]["score"],
-        reverse=True
+        text += (
+            f"🎯 Take: {day['take']}\n"
+        )
+
+    text += "\n"
+
+    text += (
+        "──────────────\n"
+        "Таймфреймы\n"
+        "──────────────\n"
     )
 
-    for result in results:
+    order = [
+        "week",
+        "day",
+        "4h",
+        "1h"
+    ]
 
-        ticker = result["ticker"]
+    names = {
 
-        signal = (
-            result["signals"]["day"]["signal"]
+        "week": "Week",
+
+        "day": "Day",
+
+        "4h": "4H",
+
+        "1h": "1H"
+
+    }
+
+    for tf in order:
+
+        s = signals[tf]
+
+        if s["signal"] == "BUY":
+
+            emoji = "🟢"
+
+        elif s["signal"] == "SELL":
+
+            emoji = "🔴"
+
+        else:
+
+            emoji = "⚪"
+
+        text += (
+            f"{emoji} "
+            f"{names[tf]}  "
+            f"{s['signal']}  "
+            f"({s['score']})\n"
         )
 
-        if is_duplicate(
-                ticker,
-                "DAY",
-                signal
-        ):
-            logging.info(
-                f"{ticker}: дубликат сигнала"
+    if day["reasons"]:
+
+        text += "\n"
+
+        text += (
+            "Причины сигнала\n"
+        )
+
+        for reason in day["reasons"]:
+
+            text += (
+                f"✔ {reason}\n"
             )
-            continue
 
-        day = result["signals"]["day"]
+    text += "\n"
 
-        save_signal(
-            ticker=ticker,
-            timeframe="DAY",
-            signal=signal,
-            score=day["score"],
-            price=day["price"],
-            stop=day["stop"],
-            take=day["take"]
+    text += (
+        datetime.now().strftime(
+            "%d.%m.%Y %H:%M"
         )
+    )
 
-        send_signal(
-            build_message(
-                ticker,
-                result["signals"]
-            )
-        )
-
-        logging.info(
-            f"Отправлен сигнал "
-            f"{ticker} "
-            f"{signal}"
-        )
-
-        time.sleep(2)
-
-
-if __name__ == "__main__":
-
-    init_db()
-
-    init_client(TOKEN)
-
-    while True:
-
-        try:
-
-            if is_working_hours():
-
-                main_loop()
-
-                logging.info(
-                    f"Сон "
-                    f"{SLEEP_SECONDS // 60} минут"
-                )
-
-                time.sleep(
-                    SLEEP_SECONDS
-                )
-
-            else:
-
-                wait = (
-                    seconds_until_work_start()
-                )
-
-                logging.info(
-                    f"Не рабочее время. "
-                    f"Сон {wait // 60} минут"
-                )
-
-                time.sleep(wait)
-
-        except Exception as e:
-
-            logging.exception(e)
-
-            time.sleep(60)
+    return text
