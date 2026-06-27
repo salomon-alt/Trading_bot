@@ -623,3 +623,150 @@ def generate_signal(df: pd.DataFrame):
             score_buy -= 10
             score_sell -= 10
 
+        # =====================================================
+        # Финальная логика
+        # =====================================================
+
+        signal = "HOLD"
+        reasons = []
+
+        # Требуем сильного подтверждения.
+        # Теперь сигнал возникает только при 60+ баллах.
+
+        if (
+            score_buy >= 60
+            and trend == "UP"
+            and last["adx"] >= 25
+        ):
+
+            signal = "BUY"
+            reasons = buy_reasons
+
+        elif (
+            score_sell >= 60
+            and trend == "DOWN"
+            and last["adx"] >= 25
+        ):
+
+            signal = "SELL"
+            reasons = sell_reasons
+
+        else:
+
+            signal = "HOLD"
+
+        # =====================================================
+        # Stop / Take
+        # =====================================================
+
+        stop = None
+        take = None
+
+        if signal == "BUY":
+
+            stop = (
+                last["close"]
+                - last["atr"] * 2
+            )
+
+            take = (
+                last["close"]
+                + last["atr"] * 4
+            )
+
+        elif signal == "SELL":
+
+            stop = (
+                last["close"]
+                + last["atr"] * 2
+            )
+
+            take = (
+                last["close"]
+                - last["atr"] * 4
+            )
+
+        score = max(
+            score_buy,
+            score_sell
+        )
+
+        return {
+
+            "signal": signal,
+
+            "score": int(round(score)),
+
+            "score_buy": int(round(score_buy)),
+
+            "score_sell": int(round(score_sell)),
+
+            "trend": trend,
+
+            "price": round(
+                float(last["close"]),
+                2
+            ),
+
+            "rsi": round(
+                float(last["rsi"]),
+                2
+            ),
+
+            "adx": round(
+                float(last["adx"]),
+                2
+            ),
+
+            "stop": (
+                round(float(stop), 2)
+                if stop is not None
+                else None
+            ),
+
+            "take": (
+                round(float(take), 2)
+                if take is not None
+                else None
+            ),
+
+            "reasons": reasons
+
+        }
+
+    except Exception as e:
+
+        logging.error(
+            f"Ошибка indicators.py: {e}"
+        )
+
+        logging.error(
+            traceback.format_exc()
+        )
+
+        return {
+
+            "signal": "HOLD",
+
+            "score": 0,
+
+            "score_buy": 0,
+
+            "score_sell": 0,
+
+            "trend": "UNKNOWN",
+
+            "price": 0,
+
+            "rsi": 0,
+
+            "adx": 0,
+
+            "stop": None,
+
+            "take": None,
+
+            "reasons": []
+
+        }
+
