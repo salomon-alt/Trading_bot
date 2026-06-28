@@ -636,3 +636,262 @@ def build_message(
     )
 
     return text
+
+# ==========================================================
+# Основной цикл анализа
+# ==========================================================
+
+def main_loop():
+
+    logging.info(
+        "=== Новый проход ==="
+    )
+
+    results = []
+
+    all_tickers = []
+
+    for tickers in TICKER_GROUPS.values():
+
+        all_tickers.extend(tickers)
+
+    logging.info(
+        f"Всего тикеров: {len(all_tickers)}"
+    )
+
+    # -------------------------------------
+    # Анализируем все инструменты
+    # -------------------------------------
+
+    for ticker in all_tickers:
+
+        try:
+
+            logging.info(
+                f"Анализ {ticker}"
+            )
+
+            result = analyze_ticker(
+                ticker
+            )
+
+            if result:
+
+                results.append(
+                    result
+                )
+
+        except Exception:
+
+            logging.exception(
+                ticker
+            )
+
+        time.sleep(2)
+
+    logging.info(
+        f"Подходящих: {len(results)}"
+    )
+
+    if not results:
+
+        logging.info(
+            "Сигналов нет"
+        )
+
+        return
+
+    # -------------------------------------
+    # Сортировка по общей уверенности
+    # -------------------------------------
+
+    results.sort(
+
+        key=lambda x:
+        x["rating"],
+
+        reverse=True
+
+    )
+
+    # -------------------------------------
+    # Отправляем только лучшие
+    # -------------------------------------
+
+    MAX_SIGNALS = 8
+
+    sent = 0
+
+    for result in results:
+
+        if sent >= MAX_SIGNALS:
+
+            break
+
+        ticker = result["ticker"]
+
+        signal = result["direction"]
+
+        day = result["signals"]["day"]
+
+        if is_duplicate(
+
+                ticker,
+
+                "DAY",
+
+                signal
+
+        ):
+
+            logging.info(
+
+                f"{ticker}: "
+
+                f"дубликат"
+
+            )
+
+            continue
+
+        save_signal(
+
+            ticker=ticker,
+
+            timeframe="DAY",
+
+            signal=signal,
+
+            score=result["rating"],
+
+            price=day["price"],
+
+            stop=day["stop"],
+
+            take=day["take"]
+
+        )
+
+        send_signal(
+
+            build_message(
+
+                ticker,
+
+                result
+
+            )
+
+        )
+
+        sent += 1
+
+        logging.info(
+
+            f"Отправлен "
+
+            f"{ticker} "
+
+            f"{signal} "
+
+            f"{result['rating']}%"
+
+        )
+
+        time.sleep(2)
+
+    logging.info(
+
+        f"Отправлено: "
+
+        f"{sent}"
+
+    )
+
+# ==========================================================
+# Итоговый рейтинг сигнала
+# ==========================================================
+
+def calculate_total_score(
+        signals: Dict[str, Dict[str, Any]]
+):
+
+    weights = {
+
+        "week": 0.40,
+
+        "day": 0.30,
+
+        "4h": 0.20,
+
+        "1h": 0.10
+
+    }
+
+    buy = 0.0
+    sell = 0.0
+
+    for tf, weight in weights.items():
+
+        s = signals[tf]
+
+        if s["signal"] == "BUY":
+
+            buy += s["score"] * weight
+
+        elif s["signal"] == "SELL":
+
+            sell += s["score"] * weight
+
+    buy = round(buy)
+    sell = round(sell)
+
+    if buy > sell:
+
+        signal = "BUY"
+        score = buy
+
+    elif sell > buy:
+
+        signal = "SELL"
+        score = sell
+
+    else:
+
+        signal = "HOLD"
+        score = 0
+
+    return {
+
+        "signal": signal,
+
+        "buy": buy,
+
+        "sell": sell,
+
+        "score": score
+
+    }
+
+
+# ==========================================================
+# Звезды качества сигнала
+# ==========================================================
+
+def stars(score: int):
+
+    if score >= 90:
+        return "★★★★★"
+
+    if score >= 80:
+        return "★★★★☆"
+
+    if score >= 70:
+        return "★★★☆☆"
+
+    if score >= 60:
+        return "★★☆☆☆"
+
+    return "★☆☆☆☆"
+
+
