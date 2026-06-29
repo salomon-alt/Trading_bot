@@ -335,10 +335,12 @@ def get_candles(
             f"{len(df)}"
         )
 
-        if not df.empty:
-    logging.info(
-        f"Тип volume: {df['volume'].dtype}"
-    )
+       logging.info(f"Свечей получено: {len(df)}")
+
+if not df.empty:
+    logging.info(f"Тип volume: {df['volume'].dtype}")
+
+return df.reset_index(drop=True)
 
         return (
             df.reset_index(
