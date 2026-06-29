@@ -197,7 +197,9 @@ def get_candles(
 
         return pd.DataFrame()
 
-    now = datetime.utcnow()
+    from datetime import datetime, timedelta, timezone
+
+now = datetime.now(timezone.utc),
 
     from_time = (
         now -
