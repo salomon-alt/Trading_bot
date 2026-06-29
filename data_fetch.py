@@ -59,9 +59,10 @@ def _call_api(
     url = BASE_URL + method
 
     resp = _session.post(
-        url,
-        json=data or {}
-    )
+    url,
+    json=data or {},
+    timeout=30
+)
 
     if resp.status_code != 200:
 
@@ -334,10 +335,10 @@ def get_candles(
             f"{len(df)}"
         )
 
-        logging.info(
-            f"Тип volume: "
-            f"{df['volume'].dtype}"
-        )
+        if not df.empty:
+    logging.info(
+        f"Тип volume: {df['volume'].dtype}"
+    )
 
         return (
             df.reset_index(
