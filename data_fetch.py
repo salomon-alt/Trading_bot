@@ -159,7 +159,7 @@ def get_figi_by_ticker(
         interval_key: str,
         days: int,
         ticker: str = None
-):
+   ):
 
     interval_map = {
         "week": "CANDLE_INTERVAL_WEEK",
@@ -172,9 +172,8 @@ def get_figi_by_ticker(
 
     if not interval:
         logging.error(
-            f"Неизвестный интервал {interval_key}"
-        )
-        return pd.DataFrame()
+            f"Неизвестный интервал {interval_key}")
+            return pd.DataFrame()
 
     now = datetime.utcnow()
 
