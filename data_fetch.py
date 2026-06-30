@@ -154,7 +154,7 @@ def get_figi_by_ticker(
 
     return None
     
-    def get_candles(
+def get_candles(
         figi: str,
         interval_key: str,
         days: int,
