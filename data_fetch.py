@@ -153,11 +153,12 @@ def get_figi_by_ticker(
     )
 
     return None
+    
     def get_candles(
-    figi: str,
-    interval_key: str,
-    days: int,
-    ticker: str = None
+        figi: str,
+        interval_key: str,
+        days: int,
+        ticker: str = None
 ):
 
     interval_map = {
@@ -169,12 +170,10 @@ def get_figi_by_ticker(
 
     interval = interval_map.get(interval_key)
 
-    if interval is None:
-
+    if not interval:
         logging.error(
             f"Неизвестный интервал {interval_key}"
         )
-
         return pd.DataFrame()
 
     now = datetime.utcnow()
@@ -263,8 +262,7 @@ def get_figi_by_ticker(
             })
 
         df = pd.DataFrame(rows)
-
-    try:
+            try:
 
         with _candles_lock:
 
