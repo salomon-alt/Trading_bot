@@ -5,9 +5,9 @@ import pandas as pd
 import ta
 
 
-# --------------------------------------------------------
-# Вспомогательные функции
-# --------------------------------------------------------
+# ==========================================================
+# Пустой сигнал
+# ==========================================================
 
 def empty_signal():
 
@@ -26,18 +26,22 @@ def empty_signal():
     }
 
 
+# ==========================================================
+# Основная функция анализа
+# ==========================================================
+
 def generate_signal(df: pd.DataFrame):
 
     try:
 
-        # -----------------------------------------
+        # ---------------------------------------
         # Проверки
-        # -----------------------------------------
+        # ---------------------------------------
 
         if df is None or df.empty:
             return empty_signal()
 
-        if len(df) < 50:
+        if len(df) < 60:
 
             result = empty_signal()
 
@@ -49,18 +53,18 @@ def generate_signal(df: pd.DataFrame):
 
         df = df.copy()
 
-        # -----------------------------------------
+        # ---------------------------------------
         # RSI
-        # -----------------------------------------
+        # ---------------------------------------
 
         df["rsi"] = ta.momentum.RSIIndicator(
             close=df["close"],
             window=14
         ).rsi()
 
-        # -----------------------------------------
+        # ---------------------------------------
         # EMA
-        # -----------------------------------------
+        # ---------------------------------------
 
         df["ema20"] = ta.trend.EMAIndicator(
             close=df["close"],
@@ -79,9 +83,9 @@ def generate_signal(df: pd.DataFrame):
             window=ema_long
         ).ema_indicator()
 
-        # -----------------------------------------
+        # ---------------------------------------
         # MACD
-        # -----------------------------------------
+        # ---------------------------------------
 
         macd = ta.trend.MACD(
             close=df["close"]
@@ -93,61 +97,51 @@ def generate_signal(df: pd.DataFrame):
 
         df["macd_hist"] = macd.macd_diff()
 
-        # -----------------------------------------
+        # ---------------------------------------
         # ADX
-        # -----------------------------------------
+        # ---------------------------------------
 
         adx = ta.trend.ADXIndicator(
-
             high=df["high"],
             low=df["low"],
             close=df["close"],
             window=14
-
         )
 
         df["adx"] = adx.adx()
-
         df["di_plus"] = adx.adx_pos()
-
         df["di_minus"] = adx.adx_neg()
 
-        # -----------------------------------------
+        # ---------------------------------------
         # ATR
-        # -----------------------------------------
+        # ---------------------------------------
 
         atr = ta.volatility.AverageTrueRange(
-
             high=df["high"],
             low=df["low"],
             close=df["close"],
             window=14
-
         )
 
         df["atr"] = atr.average_true_range()
 
-        # -----------------------------------------
+        # ---------------------------------------
         # Bollinger
-        # -----------------------------------------
+        # ---------------------------------------
 
         bb = ta.volatility.BollingerBands(
-
             close=df["close"],
             window=20,
             window_dev=2
-
         )
 
         df["bb_high"] = bb.bollinger_hband()
-
+        df["bb_mid"] = bb.bollinger_mavg()
         df["bb_low"] = bb.bollinger_lband()
 
-        df["bb_mid"] = bb.bollinger_mavg()
-
-        # -----------------------------------------
-        # Объем
-        # -----------------------------------------
+        # ---------------------------------------
+        # Средний объем
+        # ---------------------------------------
 
         df["volume_ma"] = (
             df["volume"]
@@ -155,36 +149,30 @@ def generate_signal(df: pd.DataFrame):
             .mean()
         )
 
-        # -----------------------------------------
-        # Очистка
-        # -----------------------------------------
+        # ---------------------------------------
+        # Очистка данных
+        # ---------------------------------------
 
         df = df.bfill()
-
         df = df.dropna()
 
-        if len(df) < 5:
+        if len(df) < 10:
             return empty_signal()
 
         last = df.iloc[-1]
-
         prev = df.iloc[-2]
 
-        prev2 = df.iloc[-3]
-
         score_buy = 0
-
         score_sell = 0
 
         buy_reasons = []
-
         sell_reasons = []
 
         trend = "SIDEWAYS"
 
-        # --------------------------------------------------
-        # Определение глобального тренда
-        # --------------------------------------------------
+        # ==========================================================
+        # Определение тренда
+        # ==========================================================
 
         ema_up = (
             last["ema20"] >
@@ -198,13 +186,31 @@ def generate_signal(df: pd.DataFrame):
             last["ema200"]
         )
 
-        ema20_rising = last["ema20"] > prev["ema20"]
-        ema50_rising = last["ema50"] > prev["ema50"]
+        ema20_rising = (
+            last["ema20"] >
+            prev["ema20"]
+        )
 
-        ema20_falling = last["ema20"] < prev["ema20"]
-        ema50_falling = last["ema50"] < prev["ema50"]
+        ema50_rising = (
+            last["ema50"] >
+            prev["ema50"]
+        )
 
-        if ema_up and ema20_rising and ema50_rising:
+        ema20_falling = (
+            last["ema20"] <
+            prev["ema20"]
+        )
+
+        ema50_falling = (
+            last["ema50"] <
+            prev["ema50"]
+        )
+
+        if (
+            ema_up
+            and ema20_rising
+            and ema50_rising
+        ):
 
             trend = "UP"
 
@@ -214,7 +220,11 @@ def generate_signal(df: pd.DataFrame):
                 "Восходящий тренд EMA"
             )
 
-        elif ema_down and ema20_falling and ema50_falling:
+        elif (
+            ema_down
+            and ema20_falling
+            and ema50_falling
+        ):
 
             trend = "DOWN"
 
@@ -224,9 +234,9 @@ def generate_signal(df: pd.DataFrame):
                 "Нисходящий тренд EMA"
             )
 
-        # --------------------------------------------------
+        # ==========================================================
         # ADX
-        # --------------------------------------------------
+        # ==========================================================
 
         if last["adx"] >= 25:
 
@@ -248,17 +258,12 @@ def generate_signal(df: pd.DataFrame):
 
         elif last["adx"] < 18:
 
-            buy_reasons.append(
-                "Флэт"
-            )
+            buy_reasons.append("Флэт")
+            sell_reasons.append("Флэт")
 
-            sell_reasons.append(
-                "Флэт"
-            )
-
-        # --------------------------------------------------
+        # ==========================================================
         # DI+
-        # --------------------------------------------------
+        # ==========================================================
 
         if last["di_plus"] > last["di_minus"]:
 
@@ -276,25 +281,16 @@ def generate_signal(df: pd.DataFrame):
                 "DI- выше DI+"
             )
 
-        # --------------------------------------------------
+        # ==========================================================
         # MACD
-        # --------------------------------------------------
+        # ==========================================================
 
         if (
-
-            prev["macd"] <
-            prev["macd_signal"]
-
+            prev["macd"] < prev["macd_signal"]
             and
-
-            last["macd"] >
-            last["macd_signal"]
-
+            last["macd"] > last["macd_signal"]
             and
-
-            last["macd_hist"] >
-            prev["macd_hist"]
-
+            last["macd_hist"] > prev["macd_hist"]
         ):
 
             score_buy += 20
@@ -304,20 +300,11 @@ def generate_signal(df: pd.DataFrame):
             )
 
         elif (
-
-            prev["macd"] >
-            prev["macd_signal"]
-
+            prev["macd"] > prev["macd_signal"]
             and
-
-            last["macd"] <
-            last["macd_signal"]
-
+            last["macd"] < last["macd_signal"]
             and
-
-            last["macd_hist"] <
-            prev["macd_hist"]
-
+            last["macd_hist"] < prev["macd_hist"]
         ):
 
             score_sell += 20
@@ -325,9 +312,10 @@ def generate_signal(df: pd.DataFrame):
             sell_reasons.append(
                 "MACD медвежий крест"
             )
-        # --------------------------------------------------
+
+        # ==========================================================
         # RSI
-        # --------------------------------------------------
+        # ==========================================================
 
         if trend == "UP":
 
@@ -352,7 +340,7 @@ def generate_signal(df: pd.DataFrame):
                 score_sell += 10
 
                 sell_reasons.append(
-                    "Сильная перекупленность"
+                    "Перекупленность"
                 )
 
         elif trend == "DOWN":
@@ -362,7 +350,7 @@ def generate_signal(df: pd.DataFrame):
                 score_sell += 15
 
                 sell_reasons.append(
-                    "RSI поддерживает снижение"
+                    "RSI подтверждает снижение"
                 )
 
             elif last["rsi"] > 70:
@@ -381,9 +369,9 @@ def generate_signal(df: pd.DataFrame):
                     "Сильная перепроданность"
                 )
 
-        # --------------------------------------------------
+        # ==========================================================
         # Bollinger Bands
-        # --------------------------------------------------
+        # ==========================================================
 
         if last["close"] > last["bb_high"]:
 
@@ -402,38 +390,34 @@ def generate_signal(df: pd.DataFrame):
             )
 
         elif (
-
-            last["close"] > last["bb_mid"]
-
-            and
-
             trend == "UP"
-
+            and
+            last["close"] > last["bb_mid"]
         ):
 
             score_buy += 5
 
         elif (
-
-            last["close"] < last["bb_mid"]
-
-            and
-
             trend == "DOWN"
-
+            and
+            last["close"] < last["bb_mid"]
         ):
 
             score_sell += 5
 
-        # --------------------------------------------------
+        # ==========================================================
         # Объем
-        # --------------------------------------------------
+        # ==========================================================
 
-        if last["volume_sma"] > 0:
+        if (
+            pd.notna(last["volume_ma"])
+            and
+            last["volume_ma"] > 0
+        ):
 
             volume_ratio = (
                 last["volume"] /
-                last["volume_sma"]
+                last["volume_ma"]
             )
 
             if volume_ratio >= 1.5:
@@ -464,9 +448,10 @@ def generate_signal(df: pd.DataFrame):
 
                     score_sell += 8
 
-        # --------------------------------------------------
-        # Положение цены относительно EMA20
-        # --------------------------------------------------
+
+        # ==========================================================
+        # Цена относительно EMA20
+        # ==========================================================
 
         if trend == "UP":
 
@@ -488,14 +473,18 @@ def generate_signal(df: pd.DataFrame):
                     "Цена ниже EMA20"
                 )
 
-        # --------------------------------------------------
-        # Импульс
-        # --------------------------------------------------
+        # ==========================================================
+        # Импульс последних свечей
+        # ==========================================================
 
         momentum = (
-            last["close"] -
+            (
+                last["close"] -
+                df["close"].iloc[-6]
+            )
+            /
             df["close"].iloc[-6]
-        ) / df["close"].iloc[-6] * 100
+        ) * 100
 
         if momentum > 3:
 
@@ -512,9 +501,10 @@ def generate_signal(df: pd.DataFrame):
             sell_reasons.append(
                 "Отрицательный импульс"
             )
-                    # =====================================================
-        # ФОРМИРОВАНИЕ СИГНАЛА
-        # =====================================================
+
+        # ==========================================================
+        # Формирование сигнала
+        # ==========================================================
 
         signal = "HOLD"
         reasons = []
@@ -523,34 +513,59 @@ def generate_signal(df: pd.DataFrame):
 
         if (
             score_buy >= threshold
-            and score_buy > score_sell
+            and
+            score_buy > score_sell
         ):
+
             signal = "BUY"
+
             reasons = buy_reasons
 
         elif (
             score_sell >= threshold
-            and score_sell > score_buy
+            and
+            score_sell > score_buy
         ):
+
             signal = "SELL"
+
             reasons = sell_reasons
 
-        # -----------------------------------------------------
+        # ==========================================================
+        # Stop / Take
+        # ==========================================================
 
         stop = None
         take = None
 
         if signal == "BUY":
 
-            stop = last["close"] - last["atr"] * 2.2
-            take = last["close"] + last["atr"] * 4.5
+            stop = (
+                last["close"] -
+                last["atr"] * 2.2
+            )
+
+            take = (
+                last["close"] +
+                last["atr"] * 4.5
+            )
 
         elif signal == "SELL":
 
-            stop = last["close"] + last["atr"] * 2.2
-            take = last["close"] - last["atr"] * 4.5
+            stop = (
+                last["close"] +
+                last["atr"] * 2.2
+            )
 
-        score = max(score_buy, score_sell)
+            take = (
+                last["close"] -
+                last["atr"] * 4.5
+            )
+
+        score = max(
+            score_buy,
+            score_sell
+        )
 
         return {
 
@@ -564,58 +579,39 @@ def generate_signal(df: pd.DataFrame):
 
             "trend": trend,
 
-            "price": round(float(last["close"]), 2),
+            "price": round(
+                float(last["close"]),
+                2
+            ),
 
-            "rsi": round(float(last["rsi"]), 2),
+            "rsi": round(
+                float(last["rsi"]),
+                2
+            ),
 
-            "adx": round(float(last["adx"]), 2),
+            "adx": round(
+                float(last["adx"]),
+                2
+            ),
 
             "stop": (
-                round(float(stop), 2)
+                round(
+                    float(stop),
+                    2
+                )
                 if stop is not None
                 else None
             ),
 
             "take": (
-                round(float(take), 2)
+                round(
+                    float(take),
+                    2
+                )
                 if take is not None
                 else None
             ),
 
             "reasons": reasons
-        }
 
-    except Exception as e:
-
-        logging.error(
-            f"Ошибка indicators.py: {e}"
-        )
-
-        logging.error(
-            traceback.format_exc()
-        )
-
-        return {
-
-            "signal": "HOLD",
-
-            "score": 0,
-
-            "score_buy": 0,
-
-            "score_sell": 0,
-
-            "trend": "UNKNOWN",
-
-            "price": 0,
-
-            "rsi": 0,
-
-            "adx": 0,
-
-            "stop": None,
-
-            "take": None,
-
-            "reasons": []
         }
